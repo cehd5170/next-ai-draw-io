@@ -1,0 +1,49 @@
+[project]
+name = "next-ai-draw-io-backend"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Python backend for AI-powered draw.io diagram generation"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "litellm>=1.55",
+    "openai>=1.60",
+    "anthropic>=0.40",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "lxml>=5.3",
+    "drawio2pptx>=0.0.7",
+    "python-pptx>=0.6.21",
+    "cairosvg>=2.7",
+    "Pillow>=11.0",
+    "boto3>=1.35",
+    "httpx>=0.28",
+    "newspaper3k>=0.2",
+    "html2text>=2024.2",
+    "pypdf>=4.0",
+    "json-repair>=0.30",
+    "langfuse>=2.50",
+    "sse-starlette>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "moto[dynamodb]>=5.0",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

@@ -14,6 +14,21 @@ const nextConfig: NextConfig = {
     outputFileTracingIncludes: {
         "*": ["./instrumentation.ts"],
     },
+    // Proxy /api/* to a Python backend when PYTHON_API_URL is set.
+    // This avoids CORS issues because the browser still talks to the Next.js
+    // server, which then forwards the request to the Python backend.
+    async rewrites() {
+        const pythonApiUrl = process.env.PYTHON_API_URL
+        if (pythonApiUrl) {
+            return [
+                {
+                    source: "/api/:path*",
+                    destination: `${pythonApiUrl}/api/:path*`,
+                },
+            ]
+        }
+        return []
+    },
 }
 
 export default nextConfig

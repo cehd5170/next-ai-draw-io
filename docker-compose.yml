@@ -1,7 +1,30 @@
 services:
+  # ── Self-hosted draw.io editor ──
   drawio:
     image: jgraph/drawio:latest
     ports: ["8080:8080"]
+    restart: unless-stopped
+
+  # ── Python AI backend (FastAPI) ──
+  python-backend:
+    build:
+      context: ./backend
+    ports: ["8000:8000"]
+    env_file: .env
+    environment:
+      # Expose on all interfaces inside the container
+      PORT: 8000
+      # Allow the frontend container to call us
+      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:6002,http://next-ai-draw-io:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # ── Next.js frontend ──
   next-ai-draw-io:
     build:
       context: .
@@ -11,7 +34,12 @@ services:
         # - NEXT_PUBLIC_BASE_PATH=/nextaidrawio
     ports: ["3000:3000"]
     env_file: .env
-    # environment:
-    #   # For subdirectory deployment, uncomment and set your path:
-    #   NEXT_PUBLIC_BASE_PATH: /nextaidrawio
-    depends_on: [drawio]
+    environment:
+      # Proxy all /api/* requests to the Python backend (server-side rewrite, no CORS needed)
+      PYTHON_API_URL: http://python-backend:8000
+    depends_on:
+      drawio:
+        condition: service_started
+      python-backend:
+        condition: service_healthy
+    restart: unless-stopped

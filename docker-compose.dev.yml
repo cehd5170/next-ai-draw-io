@@ -1,0 +1,14 @@
+# Development overrides — adds hot reload to the base compose.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+services:
+  python-backend:
+    volumes:
+      - ./backend/app:/app/app:ro
+    command: >
+      python -m uvicorn app.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /app/app
+    restart: "no"
+
+  next-ai-draw-io:
+    restart: "no"

@@ -59,6 +59,7 @@ import {
     PROVIDER_LOGO_MAP,
     SUGGESTED_MODELS,
 } from "@/lib/types/model-config"
+import { getApiEndpoint } from "@/lib/base-path"
 import { cn } from "@/lib/utils"
 
 interface ModelConfigDialogProps {
@@ -306,12 +307,14 @@ export function ModelConfigDialog({
             setValidatingModelIndex(i)
 
             try {
-                // For EdgeOne, construct baseUrl from current origin
+                // For EdgeOne, always use the frontend origin because
+                // /api/edgeai is an edge function served by Next.js,
+                // not by the Python backend.
                 const baseUrl = isEdgeOne
                     ? `${window.location.origin}/api/edgeai`
                     : selectedProvider.baseUrl
 
-                const response = await fetch("/api/validate-model", {
+                const response = await fetch(getApiEndpoint("/api/validate-model"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
