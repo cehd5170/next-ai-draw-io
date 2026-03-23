@@ -100,11 +100,13 @@ def replace_historical_tool_inputs(messages: list[Any]) -> list[Any]:
     Tool calls with missing/invalid inputs are filtered out entirely (they
     arise from interrupted streaming and confuse some APIs).
 
-    Operates on litellm-format messages (dicts with ``"role"`` and
-    ``"content"`` keys where content may be a list of parts).
+    Supports both litellm-format messages (``tool_calls`` array) and the
+    legacy format (tool calls in ``content`` list with ``type: "tool-call"``).
     """
     if not messages:
         return messages
+
+    _DIAGRAM_TOOLS = {"display_diagram", "edit_diagram", "append_diagram"}
 
     result: list[Any] = []
 
@@ -117,6 +119,53 @@ def replace_historical_tool_inputs(messages: list[Any]) -> list[Any]:
             result.append(message)
             continue
 
+        modified = dict(message)
+
+        # ----- Handle litellm format: tool_calls as a separate array -----
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            import json as _json
+
+            new_tool_calls = []
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    new_tool_calls.append(tc)
+                    continue
+
+                func = tc.get("function", {})
+                tool_name = func.get("name", "")
+                args_str = func.get("arguments", "{}")
+
+                # Parse arguments to check validity
+                try:
+                    args = _json.loads(args_str) if isinstance(args_str, str) else args_str
+                except (ValueError, TypeError):
+                    args = {}
+
+                # Drop tool calls with invalid inputs
+                if not args or not isinstance(args, dict) or len(args) == 0:
+                    continue
+
+                if tool_name in _DIAGRAM_TOOLS:
+                    placeholder_args = _json.dumps(
+                        {"placeholder": _XML_PLACEHOLDER}, ensure_ascii=False
+                    )
+                    new_tool_calls.append({
+                        **tc,
+                        "function": {**func, "arguments": placeholder_args},
+                    })
+                else:
+                    new_tool_calls.append(tc)
+
+            if new_tool_calls:
+                modified["tool_calls"] = new_tool_calls
+            else:
+                modified.pop("tool_calls", None)
+
+            result.append(modified)
+            continue
+
+        # ----- Handle legacy format: tool calls in content list -----
         content = message.get("content")
         if not isinstance(content, list):
             result.append(message)
@@ -139,7 +188,7 @@ def replace_historical_tool_inputs(messages: list[Any]) -> list[Any]:
             ):
                 continue
 
-            if tool_name in ("display_diagram", "edit_diagram", "append_diagram"):
+            if tool_name in _DIAGRAM_TOOLS:
                 new_content.append(
                     {
                         **part,

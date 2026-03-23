@@ -11,4 +11,7 @@ services:
     restart: "no"
 
   next-ai-draw-io:
+    volumes:
+      - ./app:/app/app:ro
+      - ./public:/app/public:ro
     restart: "no"

@@ -34,6 +34,11 @@ from app.services.file_processing import (
     replace_historical_tool_inputs,
     validate_file_parts,
 )
+from app.services.message_converter import (
+    convert_ui_messages_to_litellm,
+    extract_user_text_from_parts,
+    has_image_in_parts,
+)
 from app.services.quota_manager import QuotaManager
 
 router = APIRouter()
@@ -120,16 +125,18 @@ async def chat(
     #    Only for single-turn conversations on an empty / minimal canvas.
     # ------------------------------------------------------------------
     if len(request.messages) == 1 and is_minimal_diagram(request.xml or ""):
+        first_msg = request.messages[0]
         user_text = ""
         has_image = False
-        for part in request.messages[0].get("content", []):
-            if isinstance(part, dict):
-                if part.get("type") == "text":
-                    user_text = part.get("text", "")
-                elif part.get("type") in ("image", "file"):
-                    has_image = True
-            elif isinstance(part, str):
-                user_text = part
+
+        # Support both UIMessage format (parts) and litellm format (content)
+        parts = first_msg.get("parts") or first_msg.get("content") or []
+
+        if isinstance(parts, list):
+            user_text = extract_user_text_from_parts(parts)
+            has_image = has_image_in_parts(parts)
+        elif isinstance(parts, str):
+            user_text = parts
 
         cached_xml = find_cached_response(user_text, has_image)
         if cached_xml:
@@ -176,9 +183,13 @@ async def chat(
     xml_context = build_xml_context(request.xml or "", request.previousXml)
 
     # ------------------------------------------------------------------
-    # 7. Optional history XML replacement
+    # 7. Convert UIMessages to litellm format + optional history replacement
     # ------------------------------------------------------------------
-    messages = request.messages
+    # The AI SDK DefaultChatTransport sends messages in UIMessage format
+    # (with "parts" arrays).  litellm expects a different format (with
+    # "content" / "tool_calls").  Convert before passing to ChatService.
+    messages = convert_ui_messages_to_litellm(request.messages)
+
     if settings.ENABLE_HISTORY_XML_REPLACE:
         messages = replace_historical_tool_inputs(messages)
 

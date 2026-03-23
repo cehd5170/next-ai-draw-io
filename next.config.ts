@@ -14,20 +14,25 @@ const nextConfig: NextConfig = {
     outputFileTracingIncludes: {
         "*": ["./instrumentation.ts"],
     },
-    // Proxy /api/* to a Python backend when PYTHON_API_URL is set.
-    // This avoids CORS issues because the browser still talks to the Next.js
-    // server, which then forwards the request to the Python backend.
+    // Proxy /api/* to the Python backend.
+    // PYTHON_API_URL is required — the frontend has no local API routes;
+    // all API logic lives in the FastAPI backend.
     async rewrites() {
         const pythonApiUrl = process.env.PYTHON_API_URL
-        if (pythonApiUrl) {
-            return [
-                {
-                    source: "/api/:path*",
-                    destination: `${pythonApiUrl}/api/:path*`,
-                },
-            ]
+        if (!pythonApiUrl) {
+            throw new Error(
+                "PYTHON_API_URL environment variable is required. " +
+                    "The frontend has no local API routes — all API requests " +
+                    "are proxied to the Python backend. Set PYTHON_API_URL " +
+                    "(e.g. http://backend:8000) in your environment or docker-compose.",
+            )
         }
-        return []
+        return [
+            {
+                source: "/api/:path*",
+                destination: `${pythonApiUrl}/api/:path*`,
+            },
+        ]
     },
 }
 
