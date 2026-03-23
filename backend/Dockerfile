@@ -5,33 +5,33 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /app
 
-# Install build deps for lxml, cairosvg, Pillow
+# Only gcc needed for a few sdist packages (feedfinder2, jieba3k, etc.)
+# No g++/dev headers needed — lxml/pillow/tiktoken/etc. all have pre-built wheels
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
-    g++ \
-    libxml2-dev \
-    libxslt1-dev \
-    libcairo2-dev \
-    libffi-dev \
-    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy lockfile first (changes rarely) for layer caching, then project metadata
 COPY requirements.lock ./
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir --prefix=/install -r requirements.lock
+
+# Skip resvg (requires full Rust toolchain + libc-dev to build from source).
+# Also skip drawio2pptx from the lock file since it depends on resvg.
+# Re-install drawio2pptx with --no-deps so it won't pull resvg.
+# The app has a fallback PPTX export path if drawio2pptx's resvg features are missing.
+RUN grep -v -E 'resvg|drawio2pptx' requirements.lock > requirements-filtered.lock \
+    && pip install --no-cache-dir --prefix=/install -r requirements-filtered.lock \
+    && pip install --no-cache-dir --prefix=/install --no-deps drawio2pptx==0.0.7
 
 # Stage 2: Production runtime
 FROM python:3.12-slim AS runner
 
 WORKDIR /app
 
-# Install runtime libraries only (no compilers)
+# Runtime shared libraries for cairocffi/cairosvg (loaded via ctypes/cffi at runtime)
+# Note: libxml2/libxslt not needed — lxml manylinux wheel bundles them statically
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxml2 \
-    libxslt1.1 \
     libcairo2 \
-    libgdk-pixbuf2.0-0 \
+    libgdk-pixbuf-2.0-0 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     shared-mime-info \
