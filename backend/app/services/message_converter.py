@@ -10,7 +10,8 @@ UIMessage part types
 - ``{type: "text", text: "..."}``
 - ``{type: "file", url: "data:...", mediaType: "..."}``
 - ``{type: "tool-invocation", toolCallId: "...", toolName: "...",
-     state: "result"|"call"|"partial-call", input: {...}, output: "..."}``
+     state: "partial-call"|"call"|"output-available"|"output-error"|"result",
+     input: {...}, output: "...", errorText: "..."}``
 - ``{type: "reasoning", text: "..."}``
 
 litellm message format
@@ -215,10 +216,15 @@ def _convert_assistant_message(parts: list[Any]) -> list[dict[str, Any]]:
                 },
             })
 
-            # If the tool has been executed (state == "result"), add a tool
-            # result message.
-            if state == "result":
-                output = part.get("output", "")
+            # If the tool has been executed, add a tool result message.
+            # AI SDK UIMessage uses "result" (legacy), "output-available"
+            # (success), or "output-error" (failure) for completed tools.
+            if state in ("result", "output-available", "output-error"):
+                if state == "output-error":
+                    output = part.get("errorText", "") or part.get("output", "")
+                else:
+                    output = part.get("output", "")
+
                 if isinstance(output, dict):
                     output = json.dumps(output, ensure_ascii=False)
                 elif output is None:

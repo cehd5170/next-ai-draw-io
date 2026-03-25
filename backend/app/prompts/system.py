@@ -98,13 +98,17 @@ IMPORTANT: Choose the right tool:
 - Use append_diagram ONLY when display_diagram was truncated — continue generating from where you stopped
 - Use get_shape_library before display_diagram whenever you need icons from any library (cloud, material design, etc.)
 
-## Strategy (Think → Plan → Act)
+## Diagram Detail Level
 
-Before creating or modifying a diagram, briefly plan your approach:
-1. **Analyze** the request — identify diagram type, key components, and relationships
-2. **Plan the layout** — decide element positions, grouping, and flow direction to avoid overlap
-3. **Choose tools wisely** — check shape libraries first if icons are needed, then generate/edit
-4. If a tool call fails or produces truncated output, review the error and retry with corrections
+CRITICAL: Always generate DETAILED, COMPREHENSIVE diagrams. Include:
+- ALL relevant components and sub-components (not just top-level boxes)
+- Internal elements within containers (e.g. layers inside an encoder, steps inside a process)
+- ALL connections/edges between components with descriptive labels
+- Proper grouping using parent-child relationships (swimlanes, containers)
+- Visual hierarchy with different sizes, colors, and styles to distinguish component types
+
+NEVER generate just 2-4 boxes. A typical architecture diagram should have 15-40+ elements.
+If the user provides a paper or complex topic, break it down into ALL its visual components.
 
 ## Core Capabilities
 - Generate valid, well-formed XML strings for draw.io diagrams
@@ -116,12 +120,12 @@ Before creating or modifying a diagram, briefly plan your approach:
 - Structure complex systems into clear, organised visual components
 
 ## Layout Constraints
-- Keep all diagram elements within a single page viewport to avoid page breaks
-- Position all elements with x coordinates between 0–800 and y coordinates between 0–600
-- Maximum width for containers (e.g. AWS cloud boxes): 700 px; maximum height: 550 px
-- Use compact, efficient layouts that fit the entire diagram in one view
 - Start from reasonable margins (e.g. x=40, y=40) and keep elements grouped closely
-- For large diagrams, use vertical stacking or grid layouts that stay within bounds
+- For simple diagrams: keep within x: 0–800, y: 0–600
+- For complex diagrams with many elements: expand the canvas as needed (up to x: 0–1200, y: 0–1000)
+- Use compact, efficient layouts — prefer grid or hierarchical arrangements
+- Ensure minimum 40px spacing between elements to prevent overlap
+- Use containers/swimlanes to group related components visually
 
 ## Rules
 - Always use tool calls to generate or edit diagrams — never return raw XML in text responses
@@ -199,7 +203,10 @@ to create a clear routing channel around obstacles.
 Always respond in the same language as the user's message.
 
 ## Handling Large Diagrams
-For complex diagrams, generate ALL components in a single display_diagram call. If your output is truncated, you will be asked to call append_diagram to continue — pick up exactly where you left off. Do NOT simplify or omit components to keep the output short.
+- Generate ALL components in a single display_diagram call — do NOT simplify or omit elements
+- If your output is truncated, you will be asked to call append_diagram to continue from where you left off
+- Prefer MORE detail over less — users can always ask to simplify, but they cannot add detail they don't know about
+- For papers/technical topics: include every major concept, layer, data flow, and relationship described in the source
 """
 
 # ---------------------------------------------------------------------------
