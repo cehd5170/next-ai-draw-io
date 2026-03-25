@@ -11,6 +11,9 @@ Every line is ``data: <json>\\n\\n``.  The stream ends with ``data: [DONE]\\n\\n
 Typical event sequence for a tool-call response::
 
     data: {"type":"start","messageId":"msg_xxx"}
+    data: {"type":"reasoning-start","id":"r_xxx"}          (optional, reasoning models only)
+    data: {"type":"reasoning-delta","id":"r_xxx","delta":"…"}
+    data: {"type":"reasoning-end","id":"r_xxx"}
     data: {"type":"text-start","id":"text_xxx"}
     data: {"type":"text-delta","id":"text_xxx","delta":"I'll create…"}
     data: {"type":"text-end","id":"text_xxx"}
@@ -205,9 +208,11 @@ class ChatService:
             finish_reason: str | None = None
             assistant_text = ""
 
-            # Track whether we have opened a text block in this step.
+            # Track whether we have opened a text/reasoning block in this step.
             text_id: str | None = None
             text_block_open = False
+            reasoning_id: str | None = None
+            reasoning_block_open = False
 
             try:
                 response_stream = await litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
@@ -239,12 +244,17 @@ class ChatService:
                     finish_reason = chunk.choices[0].finish_reason or finish_reason
 
                     # ── Reasoning / thinking tokens (optional) ──────────────
+                    # AI SDK v6 UIMessageStream uses reasoning-start / reasoning-delta / reasoning-end
                     reasoning_content = getattr(delta, "reasoning_content", None)
                     if reasoning_content:
+                        if not reasoning_block_open:
+                            reasoning_id = _nanoid("reasoning_")
+                            yield _sse({"type": "reasoning-start", "id": reasoning_id})
+                            reasoning_block_open = True
                         yield _sse(
                             {
-                                "type": "reasoning",
-                                "id": _nanoid("reasoning_"),
+                                "type": "reasoning-delta",
+                                "id": reasoning_id,
                                 "delta": reasoning_content,
                             }
                         )
@@ -280,13 +290,18 @@ class ChatService:
                                 acc["arguments_raw"] += tc.function.arguments
             except Exception as exc:
                 logger.error("Stream processing failed: %s", exc, exc_info=True)
+                if reasoning_block_open and reasoning_id:
+                    yield _sse({"type": "reasoning-end", "id": reasoning_id})
                 if text_block_open and text_id:
                     yield _sse({"type": "text-end", "id": text_id})
                 for event in self._error_events(exc):
                     yield event
                 return
 
-            # Close the text block if one was opened during this step.
+            # Close open blocks from this step.
+            if reasoning_block_open and reasoning_id:
+                yield _sse({"type": "reasoning-end", "id": reasoning_id})
+                reasoning_block_open = False
             if text_block_open and text_id:
                 yield _sse({"type": "text-end", "id": text_id})
                 text_block_open = False
@@ -392,7 +407,7 @@ class ChatService:
                             {
                                 "type": "tool-output-error",
                                 "toolCallId": tool_call_id,
-                                "error": result.content,
+                                "errorText": result.content,
                             }
                         )
 
