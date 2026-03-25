@@ -84,10 +84,13 @@ def _build_openai_params(model_id: str, settings: "Settings | None") -> dict:
         tok in lower_id for tok in ("o1", "o3", "o4", "gpt-5")
     )
 
-    if reasoning_effort:
-        params["reasoning_effort"] = reasoning_effort
-    if reasoning_summary:
-        params["reasoning_summary"] = reasoning_summary
+    # Only send reasoning params to reasoning models — non-reasoning
+    # models (e.g. gpt-4o) reject unknown parameters.
+    if is_reasoning_model:
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
+        if reasoning_summary:
+            params["reasoning_summary"] = reasoning_summary
 
     return params
 
