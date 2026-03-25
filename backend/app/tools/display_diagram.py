@@ -85,10 +85,15 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
     # 5. Completeness check — detect truncation before wrapping.
     complete = is_mxcell_xml_complete(xml)
     if not complete:
-        # Return partial content so append_diagram can continue.
+        # Build a hint showing the last few lines so the LLM knows where
+        # to continue from.
+        lines = xml.rstrip().splitlines()
+        tail = "\n".join(lines[-3:]) if len(lines) > 3 else xml.rstrip()
         message_parts = warnings + [
-            "Diagram XML appears to be truncated (incomplete).  "
-            "Call append_diagram with the continuation fragment."
+            f"Diagram XML appears to be truncated (incomplete) — "
+            f"{len(lines)} lines / {len(xml)} chars saved so far.  "
+            f"Last lines saved:\n{tail}\n\n"
+            f"Call append_diagram to continue from EXACTLY where this stopped."
         ]
         return ToolResult(
             success=True,

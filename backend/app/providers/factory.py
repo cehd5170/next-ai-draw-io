@@ -84,15 +84,10 @@ def _build_openai_params(model_id: str, settings: "Settings | None") -> dict:
         tok in lower_id for tok in ("o1", "o3", "o4", "gpt-5")
     )
 
-    if is_reasoning_model:
-        params["reasoning_summary"] = reasoning_summary or "auto"
-        if reasoning_effort:
-            params["reasoning_effort"] = reasoning_effort
-    else:
-        if reasoning_effort:
-            params["reasoning_effort"] = reasoning_effort
-        if reasoning_summary:
-            params["reasoning_summary"] = reasoning_summary
+    if reasoning_effort:
+        params["reasoning_effort"] = reasoning_effort
+    if reasoning_summary:
+        params["reasoning_summary"] = reasoning_summary
 
     return params
 

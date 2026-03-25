@@ -40,6 +40,11 @@ ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
 ARG NEXT_PUBLIC_SELFHOSTED=""
 ENV NEXT_PUBLIC_SELFHOSTED="${NEXT_PUBLIC_SELFHOSTED}"
 
+# Provide a placeholder so `next build` can compile rewrites.
+# The real value is injected at runtime via docker-compose `environment:`.
+ARG PYTHON_API_URL=http://python-backend:8000
+ENV PYTHON_API_URL=${PYTHON_API_URL}
+
 # Build Next.js application (standalone mode)
 RUN npm run build
 

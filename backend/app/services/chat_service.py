@@ -43,7 +43,7 @@ from app.config import Settings
 from app.models.chat import ChatRequest
 from app.providers.base import ModelConfig
 from app.services.json_repair import get_fallback_tool_input, repair_tool_call_json
-from app.tools.registry import ToolContext, dispatch_tool, get_tool_definitions
+from app.tools.registry import ToolContext, ToolResult, dispatch_tool, get_tool_definitions
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,20 @@ def _sse(payload: dict) -> str:
 
 
 _SSE_DONE = "data: [DONE]\n\n"
+
+
+def _tool_input_events(
+    tool_call_id: str,
+    tool_name: str,
+    args_json: str,
+    parsed_args: dict,
+) -> list[str]:
+    """Return the three SSE events that announce a tool-call's input to the client."""
+    return [
+        _sse({"type": "tool-input-start", "toolCallId": tool_call_id, "toolName": tool_name}),
+        _sse({"type": "tool-input-delta", "toolCallId": tool_call_id, "inputTextDelta": args_json}),
+        _sse({"type": "tool-input-available", "toolCallId": tool_call_id, "toolName": tool_name, "input": parsed_args}),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -199,68 +213,78 @@ class ChatService:
                 response_stream = await litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
             except Exception as exc:
                 logger.error("litellm.acompletion failed: %s", exc, exc_info=True)
-                raise
+                for event in self._error_events(exc):
+                    yield event
+                return
 
-            async for chunk in response_stream:
-                delta = chunk.choices[0].delta if chunk.choices else None
-                if delta is None:
-                    continue
+            try:
+                async for chunk in response_stream:
+                    delta = chunk.choices[0].delta if chunk.choices else None
+                    if delta is None:
+                        continue
 
-                # Usage may be reported on the final chunk.
-                if hasattr(chunk, "usage") and chunk.usage:
-                    usage = chunk.usage
-                    total_usage["prompt_tokens"] += (
-                        getattr(usage, "prompt_tokens", 0) or 0
-                    )
-                    total_usage["completion_tokens"] += (
-                        getattr(usage, "completion_tokens", 0) or 0
-                    )
-                    total_usage["total_tokens"] += (
-                        getattr(usage, "total_tokens", 0) or 0
-                    )
+                    # Usage may be reported on the final chunk.
+                    if hasattr(chunk, "usage") and chunk.usage:
+                        usage = chunk.usage
+                        total_usage["prompt_tokens"] += (
+                            getattr(usage, "prompt_tokens", 0) or 0
+                        )
+                        total_usage["completion_tokens"] += (
+                            getattr(usage, "completion_tokens", 0) or 0
+                        )
+                        total_usage["total_tokens"] += (
+                            getattr(usage, "total_tokens", 0) or 0
+                        )
 
-                finish_reason = chunk.choices[0].finish_reason or finish_reason
+                    finish_reason = chunk.choices[0].finish_reason or finish_reason
 
-                # ── Reasoning / thinking tokens (optional) ──────────────────
-                reasoning_content = getattr(delta, "reasoning_content", None)
-                if reasoning_content:
-                    yield _sse(
-                        {
-                            "type": "reasoning",
-                            "id": _nanoid("reasoning_"),
-                            "delta": reasoning_content,
-                        }
-                    )
-
-                # ── Text delta ───────────────────────────────────────────────
-                if delta.content:
-                    if not text_block_open:
-                        text_id = _nanoid("text_")
-                        yield _sse({"type": "text-start", "id": text_id})
-                        text_block_open = True
-
-                    assistant_text += delta.content
-                    yield _sse(
-                        {"type": "text-delta", "id": text_id, "delta": delta.content}
-                    )
-
-                # ── Tool-call deltas ─────────────────────────────────────────
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index if hasattr(tc, "index") else 0
-                        if idx not in tool_calls_acc:
-                            tool_calls_acc[idx] = {
-                                "id": "",
-                                "name": "",
-                                "arguments_raw": "",
+                    # ── Reasoning / thinking tokens (optional) ──────────────
+                    reasoning_content = getattr(delta, "reasoning_content", None)
+                    if reasoning_content:
+                        yield _sse(
+                            {
+                                "type": "reasoning",
+                                "id": _nanoid("reasoning_"),
+                                "delta": reasoning_content,
                             }
-                        acc = tool_calls_acc[idx]
-                        if tc.id:
-                            acc["id"] = tc.id
-                        if tc.function and tc.function.name:
-                            acc["name"] = tc.function.name
-                        if tc.function and tc.function.arguments:
-                            acc["arguments_raw"] += tc.function.arguments
+                        )
+
+                    # ── Text delta ───────────────────────────────────────────
+                    if delta.content:
+                        if not text_block_open:
+                            text_id = _nanoid("text_")
+                            yield _sse({"type": "text-start", "id": text_id})
+                            text_block_open = True
+
+                        assistant_text += delta.content
+                        yield _sse(
+                            {"type": "text-delta", "id": text_id, "delta": delta.content}
+                        )
+
+                    # ── Tool-call deltas ─────────────────────────────────────
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = tc.index if hasattr(tc, "index") else 0
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {
+                                    "id": "",
+                                    "name": "",
+                                    "arguments_raw": "",
+                                }
+                            acc = tool_calls_acc[idx]
+                            if tc.id:
+                                acc["id"] = tc.id
+                            if tc.function and tc.function.name:
+                                acc["name"] = tc.function.name
+                            if tc.function and tc.function.arguments:
+                                acc["arguments_raw"] += tc.function.arguments
+            except Exception as exc:
+                logger.error("Stream processing failed: %s", exc, exc_info=True)
+                if text_block_open and text_id:
+                    yield _sse({"type": "text-end", "id": text_id})
+                for event in self._error_events(exc):
+                    yield event
+                return
 
             # Close the text block if one was opened during this step.
             if text_block_open and text_id:
@@ -275,43 +299,59 @@ class ChatService:
 
             # ------------------------------------------------------------------
             # Build assistant message with tool-call intents for history.
+            # Uses the litellm/OpenAI format: text goes in "content" as a
+            # plain string, tool calls go in a top-level "tool_calls" list.
             # ------------------------------------------------------------------
-            assistant_msg: dict[str, Any] = {"role": "assistant", "content": []}
-            if assistant_text:
-                assistant_msg["content"].append(
-                    {"type": "text", "text": assistant_text}
-                )
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": assistant_text or "",
+            }
 
             # Parse and validate each tool call's JSON arguments.
+            # When the LLM hit max_tokens (finish_reason "length"),
+            # tool-call JSON may be truncated beyond repair.
+            output_truncated = finish_reason == "length"
             parsed_per_idx: dict[int, dict] = {}
+            tool_calls_list: list[dict] = []
             for idx in sorted(tool_calls_acc.keys()):
                 acc = tool_calls_acc[idx]
                 tool_name = acc["name"]
                 raw_args = acc["arguments_raw"]
-                parsed_args = self._handle_truncated_tool_call(tool_name, raw_args)
+                parsed_args = self._handle_truncated_tool_call(
+                    tool_name, raw_args, output_truncated=output_truncated,
+                )
                 parsed_per_idx[idx] = parsed_args
 
                 # Ensure the LLM id is set; fall back to a generated one.
                 if not acc["id"]:
                     acc["id"] = _nanoid("call_")
 
-                assistant_msg["content"].append(
+                tool_calls_list.append(
                     {
-                        "type": "tool_call",
-                        "tool_call_id": acc["id"],
-                        "name": tool_name,
-                        "input": parsed_args,
+                        "id": acc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": json.dumps(parsed_args, ensure_ascii=False),
+                        },
                     }
                 )
+
+            if tool_calls_list:
+                assistant_msg["tool_calls"] = tool_calls_list
 
             messages.append(assistant_msg)
 
             # ------------------------------------------------------------------
-            # Emit tool events and execute server-side tools.
+            # Emit tool events.
+            #
+            # Client-side tools (display_diagram, edit_diagram, append_diagram)
+            # are NOT executed server-side.  The server only emits
+            # tool-input events so the frontend can render and execute them.
+            # Server-side tools are executed here and their output is fed
+            # back to the LLM for another generation round.
             # ------------------------------------------------------------------
-            # We need another LLM round only if at least one server-side tool
-            # was called and executed.
-            has_server_side_tool = False
+            needs_another_round = False
 
             for idx in sorted(tool_calls_acc.keys()):
                 acc = tool_calls_acc[idx]
@@ -320,80 +360,53 @@ class ChatService:
                 parsed_args = parsed_per_idx[idx]
                 args_json = json.dumps(parsed_args, ensure_ascii=False)
 
-                # tool-input-start
-                yield _sse(
-                    {
-                        "type": "tool-input-start",
-                        "toolCallId": tool_call_id,
-                        "toolName": tool_name,
-                    }
-                )
-
-                # tool-input-delta (stream the full serialised args as one delta)
-                yield _sse(
-                    {
-                        "type": "tool-input-delta",
-                        "toolCallId": tool_call_id,
-                        "inputTextDelta": args_json,
-                    }
-                )
-
-                # tool-input-available (full input now available)
-                yield _sse(
-                    {
-                        "type": "tool-input-available",
-                        "toolCallId": tool_call_id,
-                        "toolName": tool_name,
-                        "input": parsed_args,
-                    }
-                )
-
                 if tool_name in CLIENT_SIDE_TOOLS:
-                    # Client-side tool: the frontend handles execution.
-                    # Do NOT append a tool-result message; the client will call
-                    # addToolOutput and the conversation ends here for this turn.
-                    logger.debug("Client-side tool '%s' — skipping server execution", tool_name)
+                    # Client-side tool — just emit SSE events for the
+                    # frontend; no server-side execution.
+                    for event in _tool_input_events(tool_call_id, tool_name, args_json, parsed_args):
+                        yield event
+
                 else:
-                    # Server-side tool: execute it now.
-                    has_server_side_tool = True
-                    try:
-                        result = await self._execute_tool(
-                            name=tool_name,
-                            arguments=parsed_args,
-                            context=tool_context,
-                        )
+                    # Server-side tool — emit input events, execute,
+                    # then emit output.
+                    for event in _tool_input_events(tool_call_id, tool_name, args_json, parsed_args):
+                        yield event
+
+                    result = await self._execute_tool(
+                        name=tool_name,
+                        arguments=parsed_args,
+                        context=tool_context,
+                    )
+
+                    needs_another_round = True
+                    if result.success:
                         yield _sse(
                             {
                                 "type": "tool-output-available",
                                 "toolCallId": tool_call_id,
-                                "output": result,
+                                "output": result.content,
                             }
                         )
-                    except Exception as exc:  # noqa: BLE001
-                        error_msg = f"Tool '{tool_name}' failed: {exc}"
-                        logger.error(error_msg, exc_info=True)
+                    else:
                         yield _sse(
                             {
                                 "type": "tool-output-error",
                                 "toolCallId": tool_call_id,
-                                "error": error_msg,
+                                "error": result.content,
                             }
                         )
-                        result = error_msg
 
-                    # Append the tool result so the LLM sees it in the next round.
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call_id,
                             "name": tool_name,
-                            "content": result,
+                            "content": result.content,
                         }
                     )
 
-            # If no server-side tools were executed there is nothing to feed
-            # back to the LLM — break out of the loop.
-            if not has_server_side_tool:
+            # If nothing requires another LLM round, we are done.
+            if not needs_another_round:
                 break
 
         # ------------------------------------------------------------------
@@ -455,22 +468,57 @@ class ChatService:
         name: str,
         arguments: dict,
         context: ToolContext,
-    ) -> str:
-        """Dispatch a tool call and return its result as a string."""
+    ) -> ToolResult:
+        """Dispatch a tool call, update shared XML context, and return the result."""
         try:
             result = await dispatch_tool(name, arguments, context)
-            # Update shared XML context if the tool modified the diagram.
             if result.xml is not None:
                 context.current_xml = result.xml
-            return result.content
+            return result
         except Exception as exc:  # noqa: BLE001
             logger.error("Tool '%s' raised an exception: %s", name, exc, exc_info=True)
-            return f"Tool '{name}' failed with an internal error: {exc}"
+            return ToolResult(
+                success=False,
+                content=f"Tool '{name}' failed with an internal error: {exc}",
+            )
 
-    def _handle_truncated_tool_call(self, name: str, raw_json: str) -> dict:
+    @staticmethod
+    def _error_events(exc: Exception) -> list[str]:
+        """Return SSE events that display *exc* as a chat error and close the stream."""
+        error_msg = str(exc)
+        for prefix in (
+            "litellm.BadRequestError: ",
+            "litellm.AuthenticationError: ",
+            "litellm.RateLimitError: ",
+        ):
+            if error_msg.startswith(prefix):
+                error_msg = error_msg[len(prefix):]
+                break
+        tid = _nanoid("text_")
+        return [
+            _sse({"type": "text-start", "id": tid}),
+            _sse({"type": "text-delta", "id": tid, "delta": f"⚠️ Error: {error_msg}"}),
+            _sse({"type": "text-end", "id": tid}),
+            _sse({"type": "finish"}),
+            _SSE_DONE,
+        ]
+
+    def _handle_truncated_tool_call(
+        self,
+        name: str,
+        raw_json: str,
+        *,
+        output_truncated: bool = False,
+    ) -> dict:
         """
         Attempt JSON repair on *raw_json* (potentially truncated tool-call
         arguments from a streaming LLM response).
+
+        When *output_truncated* is True (finish_reason "length"), the LLM hit
+        max_tokens while generating the tool call.  If JSON repair fails we
+        extract whatever partial XML we can rather than returning an empty
+        fallback — the validation loop will detect the truncation and ask the
+        LLM to continue via ``append_diagram``.
 
         Returns the parsed dict on success, or a safe fallback on failure.
         """
@@ -481,6 +529,20 @@ class ChatService:
         if repaired is not None:
             return repaired
 
+        # JSON repair failed.  If the LLM hit max_tokens while emitting a
+        # diagram tool call, try to salvage the partial XML from the raw
+        # JSON fragment so that display_diagram / append_diagram can detect
+        # truncation and the LLM can continue.
+        if output_truncated and name in ("display_diagram", "append_diagram"):
+            partial_xml = self._extract_partial_xml(raw_json)
+            if partial_xml:
+                logger.info(
+                    "Salvaged %d chars of partial XML from truncated '%s' tool call",
+                    len(partial_xml),
+                    name,
+                )
+                return {"xml": partial_xml}
+
         logger.warning(
             "Could not repair JSON for tool '%s'; using fallback input. "
             "Raw args (first 200 chars): %.200s",
@@ -488,3 +550,39 @@ class ChatService:
             raw_json,
         )
         return get_fallback_tool_input(name)
+
+    @staticmethod
+    def _extract_partial_xml(raw_json: str) -> str | None:
+        """
+        Best-effort extraction of partial XML from a truncated JSON string.
+
+        Handles the common pattern ``{"xml": "<mxCell ...``  where the JSON
+        string and object were never closed.
+        """
+        # Look for the start of the XML value after "xml":
+        import re  # noqa: PLC0415
+
+        m = re.search(r'"xml"\s*:\s*"', raw_json)
+        if not m:
+            return None
+
+        # Everything after the opening quote is (escaped) XML content.
+        content = raw_json[m.end():]
+
+        # Unescape JSON string escapes.
+        content = (
+            content
+            .replace('\\"', '"')
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\\\", "\\")
+        )
+
+        # Strip any trailing incomplete escape or quote.
+        content = content.rstrip("\\").rstrip('"').rstrip()
+
+        # Must contain at least one mxCell to be useful.
+        if "<mxCell" not in content:
+            return None
+
+        return content

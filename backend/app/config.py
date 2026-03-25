@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         description="Maximum tokens the LLM may generate per response",
     )
     MAX_TOOL_STEPS: int = Field(
-        default=5,
+        default=8,
         description="Maximum number of tool-call / agentic steps per request",
     )
     ENABLE_HISTORY_XML_REPLACE: bool = Field(
