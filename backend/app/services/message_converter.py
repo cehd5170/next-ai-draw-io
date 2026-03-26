@@ -136,14 +136,20 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
                     "image_url": {"url": url},
                 })
             elif url and media_type == "application/pdf":
-                # PDFs: send as image_url with base64 data URL.
-                # litellm detects the application/pdf MIME type and
-                # converts to the provider-native format automatically
-                # (e.g. Anthropic document, Bedrock document block,
-                # Gemini inline_data).
+                # PDFs: use litellm's ``file`` content block with
+                # inline base64 (NOT a file upload).  ``file_data``
+                # contains the base64 data-URL string.  litellm
+                # converts this to each provider's native format:
+                #   OpenAI  → keeps as ``file`` (Responses API)
+                #   Anthropic → ``document`` with base64 source
+                #   Bedrock → ``BedrockDocumentBlock``
+                #   Google  → ``inline_data``
                 content.append({
-                    "type": "image_url",
-                    "image_url": {"url": url},
+                    "type": "file",
+                    "file": {
+                        "file_data": url,
+                        "filename": part.get("name", "document.pdf"),
+                    },
                 })
             elif url:
                 # Other non-image files: include as text with metadata.

@@ -53,7 +53,7 @@ class TestConvertUIMessagesToLitellm:
         }
 
     def test_user_message_with_pdf(self):
-        """PDF files are sent as image_url with base64 data URL."""
+        """PDF files use litellm file content block with inline base64."""
         messages = [
             {
                 "id": "msg_1",
@@ -69,8 +69,11 @@ class TestConvertUIMessagesToLitellm:
         assert len(result[0]["content"]) == 2
         assert result[0]["content"][0] == {"type": "text", "text": "Analyze this PDF"}
         assert result[0]["content"][1] == {
-            "type": "image_url",
-            "image_url": {"url": "data:application/pdf;base64,abc"},
+            "type": "file",
+            "file": {
+                "file_data": "data:application/pdf;base64,abc",
+                "filename": "test.pdf",
+            },
         }
 
     def test_assistant_message_with_text(self):
