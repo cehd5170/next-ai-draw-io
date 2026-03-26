@@ -116,6 +116,87 @@ def _tool_input_events(
 
 
 # ---------------------------------------------------------------------------
+# PDF fallback: extract text when model doesn't support native PDF input
+# ---------------------------------------------------------------------------
+
+
+def _extract_text_from_pdf_data_url(data_url: str) -> str:
+    """Best-effort text extraction from a base64-encoded PDF data URL.
+
+    Uses ``pypdf`` (already a project dependency) for extraction.
+    Falls back to PyMuPDF or pdfminer if available.
+    """
+    import base64 as b64mod  # noqa: PLC0415
+    import io  # noqa: PLC0415
+
+    try:
+        if "," not in data_url:
+            return ""
+        b64_data = data_url.split(",", 1)[1]
+        pdf_bytes = b64mod.b64decode(b64_data)
+
+        # pypdf is a project dependency — try it first.
+        try:
+            from pypdf import PdfReader  # noqa: PLC0415
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            text = "\n\n".join(pages).strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+        # Fallback: PyMuPDF
+        try:
+            import fitz  # noqa: PLC0415  (PyMuPDF)
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            pages = [page.get_text() for page in doc]
+            doc.close()
+            return "\n\n".join(pages).strip()
+        except ImportError:
+            pass
+
+        return ""
+    except Exception:
+        logger.warning("Failed to extract text from PDF data URL", exc_info=True)
+        return ""
+
+
+def _convert_pdf_file_blocks_to_text(messages: list[dict[str, Any]]) -> None:
+    """
+    In-place convert ``file`` content blocks (PDFs) to ``text`` blocks
+    with extracted text.  Used when the model doesn't support PDF input.
+    """
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+
+        new_content: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "file":
+                file_data = part.get("file", {}).get("file_data", "")
+                filename = part.get("file", {}).get("filename", "document.pdf")
+                text = _extract_text_from_pdf_data_url(file_data)
+                if text:
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[PDF: {filename}]\n{text}",
+                    })
+                else:
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[Attached PDF: {filename} — could not extract text]",
+                    })
+            else:
+                new_content.append(part)
+
+        msg["content"] = new_content
+
+
+# ---------------------------------------------------------------------------
 # ChatService
 # ---------------------------------------------------------------------------
 
@@ -156,7 +237,6 @@ class ChatService:
             Current diagram XML for tool context.
         """
         import litellm  # noqa: PLC0415 (deferred to avoid startup cost)
-
         single_system = getattr(model_config, "single_system", False)
 
         messages = self._build_messages(
@@ -166,15 +246,11 @@ class ChatService:
             single_system=single_system,
         )
 
-        # Log the last user message content types for debugging
-        for msg in reversed(messages):
-            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
-                ctypes = [
-                    (c.get("type", "?"), c.get("file", {}).get("file_data", "")[:50] if c.get("type") == "file" else "")
-                    for c in msg["content"]
-                ]
-                logger.info("Last user msg to litellm: provider=%s, content_types=%s", model_config.provider, ctypes)
-                break
+        # Always extract text from PDFs server-side using pypdf.
+        # Native PDF file input (litellm ``file`` content blocks) is
+        # unreliable across providers — some models silently hang.
+        # Server-side extraction with pypdf is fast and universal.
+        _convert_pdf_file_blocks_to_text(messages)
 
         tool_defs = _CACHED_TOOL_DEFS
 
@@ -237,13 +313,49 @@ class ChatService:
             reasoning_id: str | None = None
             reasoning_block_open = False
 
+            # Check if messages contain PDF file blocks (for fallback logic).
+            has_pdf_file_blocks = any(
+                isinstance(p, dict) and p.get("type") == "file"
+                for msg in messages
+                if msg.get("role") == "user" and isinstance(msg.get("content"), list)
+                for p in msg["content"]
+            )
+
             try:
                 # Use a heartbeat task to keep connection alive while waiting
                 # for the LLM provider to start streaming.
+                # Add a timeout for PDF requests to prevent indefinite hangs
+                # with models that silently fail on PDF input.
+                pdf_timeout = 120 if has_pdf_file_blocks else None
+                coro = litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
+                if pdf_timeout:
+                    coro = asyncio.wait_for(coro, timeout=pdf_timeout)
                 response_stream = await self._await_with_heartbeat(
-                    litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
+                    coro,
                     heartbeat_queue,
                 )
+            except asyncio.TimeoutError:
+                if has_pdf_file_blocks:
+                    # PDF input timed out — fall back to text extraction and retry.
+                    logger.warning(
+                        "PDF file input timed out after %ds — falling back to text extraction",
+                        pdf_timeout,
+                    )
+                    _convert_pdf_file_blocks_to_text(messages)
+                    try:
+                        response_stream = await self._await_with_heartbeat(
+                            litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
+                            heartbeat_queue,
+                        )
+                    except Exception as exc2:
+                        logger.error("litellm.acompletion (text fallback) failed: %s", exc2, exc_info=True)
+                        for event in self._error_events(exc2):
+                            yield event
+                        return
+                else:
+                    for event in self._error_events(Exception("Request timed out")):
+                        yield event
+                    return
             except Exception as exc:
                 logger.error("litellm.acompletion failed: %s", exc, exc_info=True)
                 for event in self._error_events(exc):
