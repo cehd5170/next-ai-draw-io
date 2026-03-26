@@ -10,7 +10,6 @@ All tests use a TestClient with settings overrides so no real AI provider
 or DynamoDB connection is needed.
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -124,3 +123,35 @@ class TestChatEndpoint:
         assert data["accessCodeRequired"] is False, (
             "No access code should be required when ACCESS_CODE_LIST is not configured"
         )
+
+    def test_chat_endpoint_streams_cached_diagram_for_image_prompt(self, test_client: TestClient):
+        """POST /api/chat returns SSE tool events for a cached image prompt."""
+        payload = {
+            "messages": [
+                {
+                    "id": "msg_1",
+                    "role": "user",
+                    "parts": [
+                        {"type": "text", "text": "Replicate this flowchart."},
+                        {
+                            "type": "file",
+                            "url": "data:image/png;base64,abc",
+                            "mediaType": "image/png",
+                            "filename": "flowchart.png",
+                        },
+                    ],
+                }
+            ],
+            "xml": "",
+        }
+
+        response = test_client.post("/api/chat", json=payload)
+
+        assert response.status_code == 200, response.text
+        assert "text/event-stream" in response.headers.get("content-type", "")
+
+        body = response.text
+        assert '"type": "tool-input-available"' in body
+        assert '"toolName": "display_diagram"' in body
+        assert "Process Step 1" in body
+        assert "data: [DONE]" in body

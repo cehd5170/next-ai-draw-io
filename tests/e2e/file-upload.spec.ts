@@ -75,9 +75,11 @@ test.describe("File Upload", () => {
 
     test("sends file with message to API", async ({ page }) => {
         let capturedRequest: any = null
+        let capturedBody: any = null
 
         await page.route("**/api/chat", async (route) => {
             capturedRequest = route.request()
+            capturedBody = capturedRequest.postDataJSON()
             await route.fulfill({
                 status: 200,
                 contentType: "text/event-stream",
@@ -109,6 +111,59 @@ test.describe("File Upload", () => {
         ).toBeVisible({ timeout: 15000 })
 
         expect(capturedRequest).not.toBeNull()
+        expect(capturedBody.messages.at(-1).parts).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    type: "text",
+                    text: "Convert this to a diagram",
+                }),
+                expect.objectContaining({
+                    type: "file",
+                    mediaType: "image/png",
+                    filename: "architecture.png",
+                }),
+            ]),
+        )
+        expect(capturedBody.messages.at(-1).parts[1].url).toContain(
+            "data:image/png;base64,",
+        )
+    })
+
+    test("renders uploaded PDF as a file card instead of an image", async ({
+        page,
+    }) => {
+        await page.route("**/api/chat", async (route) => {
+            await route.fulfill({
+                status: 200,
+                contentType: "text/event-stream",
+                body: createMockSSEResponse(
+                    SINGLE_BOX_XML,
+                    "Based on your PDF, here is a diagram:",
+                ),
+            })
+        })
+
+        await page.goto("/", { waitUntil: "networkidle" })
+        await getIframe(page).waitFor({ state: "visible", timeout: 30000 })
+
+        const fileInput = page.locator('input[type="file"]')
+
+        await fileInput.setInputFiles({
+            name: "architecture.pdf",
+            mimeType: "application/pdf",
+            buffer: Buffer.from(
+                "%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF",
+            ),
+        })
+
+        await sendMessage(page, "Summarize the content and create a diagram")
+
+        await expect(page.locator('text="architecture.pdf"')).toBeVisible({
+            timeout: 10000,
+        })
+        await expect(
+            page.locator('text="Image failed to load"'),
+        ).not.toBeVisible()
     })
 
     test("shows error for oversized file", async ({ page }) => {

@@ -43,6 +43,30 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _get_part_url(part: dict[str, Any]) -> str:
+    return str(part.get("url") or part.get("data") or "")
+
+
+def _get_part_media_type(part: dict[str, Any]) -> str:
+    media_type = str(part.get("mediaType") or part.get("mimeType") or "")
+    if media_type:
+        return media_type
+
+    url = _get_part_url(part)
+    if url.startswith("data:"):
+        import re
+
+        match = re.match(r"^data:([^;,]+)[;,]", url)
+        if match:
+            return match.group(1)
+
+    return ""
+
+
+def _get_part_filename(part: dict[str, Any], default: str) -> str:
+    return str(part.get("filename") or part.get("name") or default)
+
+
 def convert_ui_messages_to_litellm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Convert a list of AI SDK UIMessages (with ``parts``) to litellm-format
@@ -130,22 +154,37 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
 
         elif ptype == "file":
             # File parts may be images, PDFs, or other files.
-            url = part.get("url", "")
-            media_type = part.get("mediaType", part.get("mimeType", ""))
+            url = _get_part_url(part)
+            media_type = _get_part_media_type(part)
+            filename = _get_part_filename(part, "file")
             logger.info(
                 "File part: mediaType=%r, has_url=%s, url_prefix=%s, name=%r",
                 media_type,
                 bool(url),
                 url[:60] if url else "",
-                part.get("name"),
+                filename,
             )
 
-            if url and media_type and media_type.startswith("image/"):
+            if not url:
+                logger.warning(
+                    "File part has no 'url' or 'data' field; skipping. name=%r",
+                    filename,
+                )
+                continue
+            if not media_type:
+                logger.warning(
+                    "File part has no 'mediaType' or 'mimeType' field; skipping. name=%r, url_prefix=%s",
+                    filename,
+                    url[:60] if url else "",
+                )
+                continue
+
+            if media_type.startswith("image/"):
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": url},
                 })
-            elif url and media_type == "application/pdf":
+            elif media_type == "application/pdf":
                 # PDFs: use litellm's ``file`` content block with
                 # inline base64 (NOT a file upload).  ``file_data``
                 # contains the base64 data-URL string.  litellm
@@ -158,14 +197,14 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
                     "type": "file",
                     "file": {
                         "file_data": url,
-                        "filename": part.get("name", "document.pdf"),
+                        "filename": _get_part_filename(part, "document.pdf"),
                     },
                 })
-            elif url:
+            else:
                 # Other non-image files: include as text with metadata.
                 content.append({
                     "type": "text",
-                    "text": f"[Attached file: {part.get('name', 'file')} ({media_type})]",
+                    "text": f"[Attached file: {_get_part_filename(part, 'file')} ({media_type})]",
                 })
 
         elif ptype == "image":
@@ -309,7 +348,7 @@ def has_file_in_parts(parts: list[Any]) -> bool:
             continue
         ptype = part.get("type", "")
         if ptype == "file":
-            media_type = part.get("mediaType", part.get("mimeType", ""))
+            media_type = _get_part_media_type(part)
             if media_type and (
                 media_type.startswith("image/") or media_type == "application/pdf"
             ):

@@ -135,6 +135,31 @@ const getUserOriginalText = (message: UIMessage): string => {
     return fullText.replace(filePattern, "").trim()
 }
 
+interface MessageFilePart {
+    type: "file"
+    url?: string
+    mediaType?: string
+    mimeType?: string
+    filename?: string
+    name?: string
+}
+
+function getFilePartMediaType(part: MessageFilePart): string {
+    const mediaType = part.mediaType || part.mimeType
+    if (mediaType) {
+        return mediaType
+    }
+    if (part.url?.startsWith("data:")) {
+        const match = /^data:([^;,]+)[;,]/.exec(part.url)
+        return match?.[1] || ""
+    }
+    return ""
+}
+
+function getFilePartName(part: MessageFilePart): string {
+    return part.filename || part.name || "Uploaded file"
+}
+
 interface SessionMetadata {
     id: string
     title: string
@@ -1211,33 +1236,78 @@ export function ChatMessageDisplay({
                                                                         part.type ===
                                                                         "file"
                                                                     ) {
+                                                                        const filePart =
+                                                                            part as MessageFilePart
+                                                                        const fileUrl =
+                                                                            filePart.url ||
+                                                                            ""
+                                                                        const fileName =
+                                                                            getFilePartName(
+                                                                                filePart,
+                                                                            )
+                                                                        const mediaType =
+                                                                            getFilePartMediaType(
+                                                                                filePart,
+                                                                            )
+                                                                        const isImage =
+                                                                            mediaType.startsWith(
+                                                                                "image/",
+                                                                            )
+                                                                        const isPdf =
+                                                                            mediaType ===
+                                                                            "application/pdf"
+
                                                                         return (
                                                                             <div
                                                                                 key={`${message.id}-file-${group.startIndex}-${partIndex}`}
                                                                                 className="mt-2"
                                                                             >
-                                                                                <Image
-                                                                                    src={
-                                                                                        (
-                                                                                            part as {
-                                                                                                url: string
-                                                                                            }
-                                                                                        )
-                                                                                            .url
-                                                                                    }
-                                                                                    width={
-                                                                                        200
-                                                                                    }
-                                                                                    height={
-                                                                                        200
-                                                                                    }
-                                                                                    alt={`Uploaded diagram or image for AI analysis`}
-                                                                                    className="rounded-lg border border-white/20"
-                                                                                    style={{
-                                                                                        objectFit:
-                                                                                            "contain",
-                                                                                    }}
-                                                                                />
+                                                                                {isImage &&
+                                                                                fileUrl ? (
+                                                                                    <Image
+                                                                                        src={
+                                                                                            fileUrl
+                                                                                        }
+                                                                                        width={
+                                                                                            200
+                                                                                        }
+                                                                                        height={
+                                                                                            200
+                                                                                        }
+                                                                                        alt={
+                                                                                            fileName
+                                                                                        }
+                                                                                        className="max-h-[200px] max-w-[200px] rounded-lg border border-white/20 object-contain"
+                                                                                        unoptimized
+                                                                                        onError={(
+                                                                                            e,
+                                                                                        ) => {
+                                                                                            e.currentTarget.style.display =
+                                                                                                "none"
+                                                                                        }}
+                                                                                    />
+                                                                                ) : (
+                                                                                    <div className="flex min-w-[220px] items-center gap-3 rounded-lg border border-white/20 bg-background/60 px-3 py-2 text-left">
+                                                                                        {isPdf ? (
+                                                                                            <FileText className="h-5 w-5 shrink-0 text-red-500" />
+                                                                                        ) : (
+                                                                                            <FileCode className="h-5 w-5 shrink-0 text-blue-500" />
+                                                                                        )}
+                                                                                        <div className="min-w-0">
+                                                                                            <div className="truncate text-sm font-medium">
+                                                                                                {
+                                                                                                    fileName
+                                                                                                }
+                                                                                            </div>
+                                                                                            <div className="text-xs text-muted-foreground">
+                                                                                                {isPdf
+                                                                                                    ? "PDF"
+                                                                                                    : mediaType ||
+                                                                                                      "File"}
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                )}
                                                                             </div>
                                                                         )
                                                                     }

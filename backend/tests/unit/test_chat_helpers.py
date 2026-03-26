@@ -100,6 +100,26 @@ class TestValidateFileParts:
         with pytest.raises(ValueError):
             validate_file_parts(messages, 2 * 1024 * 1024, 5)
 
+    def test_infers_mime_type_from_data_url(self):
+        messages = [
+            {
+                "parts": [
+                    {"type": "file", "url": "data:image/png;base64," + "A" * 10}
+                ]
+            }
+        ]
+        validate_file_parts(messages, 2 * 1024 * 1024, 5)
+
+    def test_validates_content_list_when_parts_missing(self):
+        messages = [
+            {
+                "content": [
+                    {"type": "file", "url": "data:application/pdf;base64," + "A" * 10}
+                ]
+            }
+        ]
+        validate_file_parts(messages, 2 * 1024 * 1024, 5)
+
 
 # ---------------------------------------------------------------------------
 # TestReplaceHistoricalToolInputs

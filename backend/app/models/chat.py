@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -23,31 +23,70 @@ class TextPart(BaseModel):
 
 
 class ImagePart(BaseModel):
-    """An inline image message part (base-64 data URL or remote URL)."""
+    """An inline image message part (base-64 data URL or remote URL).
+
+    Accepts both AI SDK field names (``url``, ``mediaType``) and legacy
+    field names (``data``, ``mimeType``).
+    """
 
     type: Literal["image"] = "image"
-    data: str = Field(..., description="Base-64 encoded image bytes or a remote URL")
+    data: str = Field(default="", description="Base-64 encoded image bytes or a remote URL")
+    url: str = Field(default="", description="Alias for data (AI SDK format)")
     mime_type: str = Field(
         default="image/png",
         alias="mimeType",
         description="MIME type of the image (e.g. image/png, image/jpeg)",
     )
+    media_type: str = Field(
+        default="",
+        alias="mediaType",
+        description="Alias for mimeType (AI SDK format)",
+    )
 
     model_config = {"populate_by_name": True}
 
+    @model_validator(mode="after")
+    def _normalise_aliases(self) -> "ImagePart":
+        """Ensure ``data`` and ``mime_type`` are populated from their aliases."""
+        if not self.data and self.url:
+            self.data = self.url
+        if self.media_type and self.mime_type == "image/png":
+            self.mime_type = self.media_type
+        return self
+
 
 class FilePart(BaseModel):
-    """A file attachment message part."""
+    """A file attachment message part.
+
+    Accepts both AI SDK field names (``url``, ``mediaType``) and legacy
+    field names (``data``, ``mimeType``).
+    """
 
     type: Literal["file"] = "file"
-    data: str = Field(..., description="Base-64 encoded file bytes")
+    data: str = Field(default="", description="Base-64 encoded file bytes")
+    url: str = Field(default="", description="Alias for data (AI SDK format)")
     mime_type: str = Field(
+        default="",
         alias="mimeType",
         description="MIME type of the file (e.g. application/pdf)",
+    )
+    media_type: str = Field(
+        default="",
+        alias="mediaType",
+        description="Alias for mimeType (AI SDK format)",
     )
     name: Optional[str] = Field(default=None, description="Original filename")
 
     model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _normalise_aliases(self) -> "FilePart":
+        """Ensure ``data`` and ``mime_type`` are populated from their aliases."""
+        if not self.data and self.url:
+            self.data = self.url
+        if not self.mime_type and self.media_type:
+            self.mime_type = self.media_type
+        return self
 
 
 # Union alias used in ChatRequest

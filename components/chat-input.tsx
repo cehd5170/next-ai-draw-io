@@ -37,8 +37,8 @@ import { extractUrlContent, type UrlData } from "@/lib/url-utils"
 import { isRealDiagram } from "@/lib/utils"
 import { FilePreviewList } from "./file-preview-list"
 
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024 // 10MB (images + PDFs sent as base64)
-const MAX_FILES = 5
+const DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024
+const DEFAULT_MAX_FILES = 5
 
 function isValidFileType(file: File): boolean {
     return file.type.startsWith("image/") || isPdfFile(file) || isTextFile(file)
@@ -68,14 +68,16 @@ function validateFiles(
     newFiles: File[],
     existingCount: number,
     dict: any,
+    maxFileSize: number,
+    maxFiles: number,
 ): ValidationResult {
     const errors: string[] = []
     const validFiles: File[] = []
 
-    const availableSlots = MAX_FILES - existingCount
+    const availableSlots = maxFiles - existingCount
 
     if (availableSlots <= 0) {
-        errors.push(formatMessage(dict.errors.maxFiles, { max: MAX_FILES }))
+        errors.push(formatMessage(dict.errors.maxFiles, { max: maxFiles }))
         return { validFiles, errors }
     }
 
@@ -97,8 +99,8 @@ function validateFiles(
         // Check size for images and PDFs (both sent as base64 to model)
         // Text files are extracted client-side, so file size doesn't matter
         const isTextOnly = isTextFile(file)
-        if (!isTextOnly && file.size > MAX_IMAGE_SIZE) {
-            const maxSizeMB = MAX_IMAGE_SIZE / 1024 / 1024
+        if (!isTextOnly && file.size > maxFileSize) {
+            const maxSizeMB = maxFileSize / 1024 / 1024
             errors.push(
                 formatMessage(dict.errors.fileExceeds, {
                     name: file.name,
@@ -173,6 +175,8 @@ interface ChatInputProps {
     onModelSelect?: (modelId: string | undefined) => void
     onConfigureModels?: () => void
     showUnvalidatedModels?: boolean
+    maxFileSize?: number
+    maxFiles?: number
     // Focus control props
     shouldFocus?: boolean
     onFocused?: () => void
@@ -198,6 +202,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onModelSelect = () => {},
             onConfigureModels,
             showUnvalidatedModels = false,
+            maxFileSize = DEFAULT_MAX_FILE_SIZE,
+            maxFiles = DEFAULT_MAX_FILES,
             shouldFocus = false,
             onFocused,
         },
@@ -323,6 +329,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
                     imageFiles,
                     files.length,
                     dict,
+                    maxFileSize,
+                    maxFiles,
                 )
                 showValidationErrors(errors, dict)
                 if (validFiles.length > 0) {
@@ -337,6 +345,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
                 newFiles,
                 files.length,
                 dict,
+                maxFileSize,
+                maxFiles,
             )
             showValidationErrors(errors, dict)
             if (validFiles.length > 0) {
@@ -387,6 +397,8 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
                 supportedFiles,
                 files.length,
                 dict,
+                maxFileSize,
+                maxFiles,
             )
             showValidationErrors(errors, dict)
             if (validFiles.length > 0) {

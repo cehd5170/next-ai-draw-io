@@ -26,7 +26,7 @@ from app.config import Settings
 from app.dependencies import get_client_overrides, get_settings, get_user_id
 from app.models.chat import ChatRequest, ClientOverrides
 from app.prompts import build_xml_context, get_system_prompt
-from app.providers.factory import get_ai_model
+from app.providers.factory import get_ai_model, supports_image_input
 from app.services.cached_responses import find_cached_response
 from app.services.chat_service import ChatService, _nanoid, _sse, _SSE_DONE
 from app.services.file_processing import (
@@ -218,6 +218,27 @@ async def chat(
     except ValueError as exc:
         logger.error("Model configuration error: %s", exc)
         return JSONResponse(status_code=400, content={"error": str(exc)})
+
+    has_image_input = any(
+        isinstance(msg, dict)
+        and msg.get("role") == "user"
+        and isinstance(msg.get("content"), list)
+        and any(
+            isinstance(part, dict) and part.get("type") == "image_url"
+            for part in msg["content"]
+        )
+        for msg in messages
+    )
+    if has_image_input and not supports_image_input(model_config.model_id):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": (
+                    "The selected model does not support image input. "
+                    "Choose a vision-capable model or remove the image attachment."
+                )
+            },
+        )
 
     # ------------------------------------------------------------------
     # 9. Stream response

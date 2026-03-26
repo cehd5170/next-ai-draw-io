@@ -17,6 +17,48 @@ from typing import Any
 
 _XML_PLACEHOLDER = "[XML content replaced - see current diagram XML in system context]"
 
+ALLOWED_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "application/pdf",
+}
+
+
+def _get_message_parts(message: Any) -> list[Any]:
+    if isinstance(message, dict):
+        raw_parts = message.get("parts")
+        if isinstance(raw_parts, list):
+            return raw_parts
+
+        raw_content = message.get("content")
+        if isinstance(raw_content, list):
+            return raw_content
+
+        return []
+
+    if hasattr(message, "parts"):
+        return message.parts or []
+    if hasattr(message, "content") and isinstance(message.content, list):
+        return message.content or []
+    return []
+
+
+def _get_part_media_type(part: dict[str, Any]) -> str:
+    media_type = str(part.get("mediaType") or part.get("mimeType") or "")
+    if media_type:
+        return media_type
+
+    data_url = str(part.get("url") or part.get("data") or "")
+    if data_url.startswith("data:"):
+        match = re.match(r"^data:([^;,]+)[;,]", data_url)
+        if match:
+            return match.group(1)
+
+    return ""
+
 
 def validate_file_parts(
     messages: list[Any],
@@ -47,12 +89,7 @@ def validate_file_parts(
         return
 
     last_message = messages[-1]
-    parts: list[Any] = []
-
-    if isinstance(last_message, dict):
-        parts = last_message.get("parts", []) or []
-    elif hasattr(last_message, "parts"):
-        parts = last_message.parts or []
+    parts = _get_message_parts(last_message)
 
     file_parts = [
         p
@@ -66,6 +103,14 @@ def validate_file_parts(
         )
 
     for part in file_parts:
+        # Validate MIME type
+        mime_type = _get_part_media_type(part)
+        if mime_type and mime_type not in ALLOWED_MIME_TYPES:
+            raise ValueError(
+                f"Unsupported file type: {mime_type}. "
+                f"Allowed types: {', '.join(sorted(ALLOWED_MIME_TYPES))}"
+            )
+
         # Data URLs: "data:<mime>;base64,<data>"
         data_url: str = part.get("url") or part.get("data") or ""
         if data_url.startswith("data:"):

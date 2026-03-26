@@ -83,6 +83,15 @@ const MAX_AUTO_RETRY_COUNT = 3
 
 const MAX_CONTINUATION_RETRY_COUNT = 2 // Limit for truncation continuation retries
 
+function getMediaTypeFromDataUrl(dataUrl: string): string {
+    if (!dataUrl.startsWith("data:")) {
+        return ""
+    }
+
+    const match = /^data:([^;,]+)[;,]/.exec(dataUrl)
+    return match?.[1] || ""
+}
+
 /**
  * Check if auto-resubmit should happen based on tool errors.
  * Only checks the LAST tool part (most recent tool call), not all tool parts.
@@ -162,7 +171,7 @@ export default function ChatPanel({
     }
 
     // File processing using extracted hook
-    const { files, pdfData, handleFileChange, setFiles } = useFileProcessor()
+    const { files, pdfData, handleFileChange } = useFileProcessor()
     const [urlData, setUrlData] = useState<Map<string, UrlData>>(new Map())
 
     const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -178,6 +187,8 @@ export default function ChatPanel({
     const [dailyRequestLimit, setDailyRequestLimit] = useState(0)
     const [dailyTokenLimit, setDailyTokenLimit] = useState(0)
     const [tpmLimit, setTpmLimit] = useState(0)
+    const [maxFileSize, setMaxFileSize] = useState(10 * 1024 * 1024)
+    const [maxFiles, setMaxFiles] = useState(5)
     const [minimalStyle, setMinimalStyle] = useState(false)
     const [vlmValidationEnabled, setVlmValidationEnabled] = useState(false)
     const [customSystemMessage, setCustomSystemMessage] = useState("")
@@ -215,6 +226,8 @@ export default function ChatPanel({
                 setDailyRequestLimit(data.dailyRequestLimit || 0)
                 setDailyTokenLimit(data.dailyTokenLimit || 0)
                 setTpmLimit(data.tpmLimit || 0)
+                setMaxFileSize(data.maxFileSize || 10 * 1024 * 1024)
+                setMaxFiles(data.maxFiles || 5)
             })
             .catch(() => {})
     }, [])
@@ -821,7 +834,7 @@ export default function ChatPanel({
                     ] as any)
                     setInput("")
                     sessionStorage.removeItem(SESSION_STORAGE_INPUT_KEY)
-                    setFiles([])
+                    handleFileChange([])
                     setUrlData(new Map())
                     return
                 }
@@ -867,7 +880,7 @@ export default function ChatPanel({
                 // Token count is tracked in onFinish with actual server usage
                 setInput("")
                 sessionStorage.removeItem(SESSION_STORAGE_INPUT_KEY)
-                setFiles([])
+                handleFileChange([])
                 setUrlData(new Map())
             } catch (error) {
                 console.error("Error fetching chart data:", error)
@@ -1116,16 +1129,23 @@ export default function ChatPanel({
                 // Images and PDFs: send as base64 file parts directly to the model
                 // Modern models (Claude, GPT-4, Gemini) support both image and PDF input natively
                 const reader = new FileReader()
-                const dataUrl = await new Promise<string>((resolve) => {
+                const dataUrl = await new Promise<string>((resolve, reject) => {
                     reader.onload = () => resolve(reader.result as string)
+                    reader.onerror = () =>
+                        reject(new Error(`Failed to read file: ${file.name}`))
                     reader.readAsDataURL(file)
+                }).catch((err) => {
+                    console.error(err)
+                    return ""
                 })
+                if (!dataUrl) continue
+                const mediaType = file.type || getMediaTypeFromDataUrl(dataUrl)
 
                 imageParts.push({
                     type: "file",
                     url: dataUrl,
-                    mediaType: file.type,
-                    name: file.name,
+                    mediaType,
+                    filename: file.name,
                 })
             } else if (isPdfFile(file)) {
                 // Fallback for cached response path (no imageParts array):
@@ -1419,6 +1439,8 @@ export default function ChatPanel({
                     onModelSelect={modelConfig.setSelectedModelId}
                     onConfigureModels={() => setShowModelConfigDialog(true)}
                     showUnvalidatedModels={modelConfig.showUnvalidatedModels}
+                    maxFileSize={maxFileSize}
+                    maxFiles={maxFiles}
                     shouldFocus={shouldFocusInput}
                     onFocused={() => setShouldFocusInput(false)}
                 />

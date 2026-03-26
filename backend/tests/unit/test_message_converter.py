@@ -76,6 +76,46 @@ class TestConvertUIMessagesToLitellm:
             },
         }
 
+    def test_user_message_with_filename_alias(self):
+        messages = [
+            {
+                "id": "msg_1",
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "file",
+                        "url": "data:application/pdf;base64,abc",
+                        "mediaType": "application/pdf",
+                        "filename": "alias.pdf",
+                    },
+                ],
+            }
+        ]
+        result = convert_ui_messages_to_litellm(messages)
+        assert result[0]["content"][0]["file"]["filename"] == "alias.pdf"
+
+    def test_user_message_infers_media_type_from_data_url(self):
+        messages = [
+            {
+                "id": "msg_1",
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "file",
+                        "url": "data:image/png;base64,abc",
+                        "filename": "diagram.png",
+                    },
+                ],
+            }
+        ]
+        result = convert_ui_messages_to_litellm(messages)
+        assert result[0]["content"] == [
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64,abc"},
+            }
+        ]
+
     def test_assistant_message_with_text(self):
         messages = [
             {
@@ -250,6 +290,10 @@ class TestHasFileInParts:
 
     def test_pdf_file_detected(self):
         parts = [{"type": "file", "url": "data:application/pdf;base64,...", "mediaType": "application/pdf"}]
+        assert has_file_in_parts(parts) is True
+
+    def test_file_detected_when_media_type_is_in_data_url(self):
+        parts = [{"type": "file", "url": "data:image/png;base64,..."}]
         assert has_file_in_parts(parts) is True
 
     def test_image_type_part(self):

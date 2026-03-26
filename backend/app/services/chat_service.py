@@ -166,6 +166,9 @@ def _convert_pdf_file_blocks_to_text(messages: list[dict[str, Any]]) -> None:
     """
     In-place convert ``file`` content blocks (PDFs) to ``text`` blocks
     with extracted text.  Used when the model doesn't support PDF input.
+
+    Errors during extraction are logged and converted to informative
+    placeholder text so the overall request is never silently broken.
     """
     for msg in messages:
         if msg.get("role") != "user":
@@ -177,18 +180,49 @@ def _convert_pdf_file_blocks_to_text(messages: list[dict[str, Any]]) -> None:
         new_content: list[dict[str, Any]] = []
         for part in content:
             if isinstance(part, dict) and part.get("type") == "file":
-                file_data = part.get("file", {}).get("file_data", "")
-                filename = part.get("file", {}).get("filename", "document.pdf")
-                text = _extract_text_from_pdf_data_url(file_data)
+                file_info = part.get("file") or {}
+                file_data = file_info.get("file_data", "")
+                filename = file_info.get("filename", "document.pdf")
+
+                if not file_data:
+                    logger.warning(
+                        "PDF file block for '%s' has no file_data; "
+                        "replacing with placeholder text.",
+                        filename,
+                    )
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[Attached PDF: {filename} — no file data provided]",
+                    })
+                    continue
+
+                try:
+                    text = _extract_text_from_pdf_data_url(file_data)
+                except Exception:
+                    logger.error(
+                        "Unexpected error extracting text from PDF '%s'",
+                        filename,
+                        exc_info=True,
+                    )
+                    text = ""
+
                 if text:
                     new_content.append({
                         "type": "text",
                         "text": f"[PDF: {filename}]\n{text}",
                     })
                 else:
+                    logger.warning(
+                        "Could not extract any text from PDF '%s'. "
+                        "The PDF may be image-only or corrupted.",
+                        filename,
+                    )
                     new_content.append({
                         "type": "text",
-                        "text": f"[Attached PDF: {filename} — could not extract text]",
+                        "text": (
+                            f"[Attached PDF: {filename} — could not extract text. "
+                            f"The PDF may be image-only or corrupted.]"
+                        ),
                     })
             else:
                 new_content.append(part)
