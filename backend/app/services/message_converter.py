@@ -126,7 +126,7 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
                 content.append({"type": "text", "text": text})
 
         elif ptype == "file":
-            # File parts may be images or other files.
+            # File parts may be images, PDFs, or other files.
             url = part.get("url", "")
             media_type = part.get("mediaType", part.get("mimeType", ""))
 
@@ -135,8 +135,16 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
                     "type": "image_url",
                     "image_url": {"url": url},
                 })
+            elif url and media_type == "application/pdf":
+                # PDFs: keep as a tagged dict so the chat service can
+                # transform to the correct provider-specific format later.
+                content.append({
+                    "type": "pdf_url",
+                    "pdf_url": {"url": url},
+                    "filename": part.get("name", "document.pdf"),
+                })
             elif url:
-                # Non-image files: include as text with metadata.
+                # Other non-image files: include as text with metadata.
                 content.append({
                     "type": "text",
                     "text": f"[Attached file: {part.get('name', 'file')} ({media_type})]",
@@ -276,15 +284,17 @@ def extract_user_text_from_parts(parts: list[Any]) -> str:
     return ""
 
 
-def has_image_in_parts(parts: list[Any]) -> bool:
-    """Return True if any part is a file with an image MIME type."""
+def has_file_in_parts(parts: list[Any]) -> bool:
+    """Return True if any part is a file with an image or PDF MIME type."""
     for part in parts:
         if not isinstance(part, dict):
             continue
         ptype = part.get("type", "")
         if ptype == "file":
             media_type = part.get("mediaType", part.get("mimeType", ""))
-            if media_type and media_type.startswith("image/"):
+            if media_type and (
+                media_type.startswith("image/") or media_type == "application/pdf"
+            ):
                 return True
         if ptype == "image":
             return True

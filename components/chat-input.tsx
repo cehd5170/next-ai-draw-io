@@ -37,7 +37,7 @@ import { extractUrlContent, type UrlData } from "@/lib/url-utils"
 import { isRealDiagram } from "@/lib/utils"
 import { FilePreviewList } from "./file-preview-list"
 
-const MAX_IMAGE_SIZE = 2 * 1024 * 1024 // 2MB
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024 // 10MB (images + PDFs sent as base64)
 const MAX_FILES = 5
 
 function isValidFileType(file: File): boolean {
@@ -94,9 +94,10 @@ function validateFiles(
             )
             continue
         }
-        // Only check size for images (PDFs/text files are extracted client-side, so file size doesn't matter)
-        const isExtractedFile = isPdfFile(file) || isTextFile(file)
-        if (!isExtractedFile && file.size > MAX_IMAGE_SIZE) {
+        // Check size for images and PDFs (both sent as base64 to model)
+        // Text files are extracted client-side, so file size doesn't matter
+        const isTextOnly = isTextFile(file)
+        if (!isTextOnly && file.size > MAX_IMAGE_SIZE) {
             const maxSizeMB = MAX_IMAGE_SIZE / 1024 / 1024
             errors.push(
                 formatMessage(dict.errors.fileExceeds, {

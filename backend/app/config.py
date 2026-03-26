@@ -53,15 +53,15 @@ class Settings(BaseSettings):
     # File upload limits
     # ------------------------------------------------------------------
     MAX_FILE_SIZE_BYTES: int = Field(
-        default=2 * 1024 * 1024,  # 2 MB
-        description="Maximum size (bytes) of a single uploaded file",
+        default=10 * 1024 * 1024,  # 10 MB
+        description="Maximum size (bytes) of a single uploaded file (images + PDFs)",
     )
     MAX_FILES_PER_MESSAGE: int = Field(
         default=5,
         description="Maximum number of files allowed in a single message",
     )
     MAX_IMAGE_SIZE_BYTES: int = Field(
-        default=2 * 1024 * 1024,  # 2 MB
+        default=10 * 1024 * 1024,  # 10 MB
         description="Maximum size (bytes) of a single uploaded image",
     )
 

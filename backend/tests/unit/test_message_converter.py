@@ -9,7 +9,7 @@ import pytest
 from app.services.message_converter import (
     convert_ui_messages_to_litellm,
     extract_user_text_from_parts,
-    has_image_in_parts,
+    has_file_in_parts,
 )
 
 
@@ -51,6 +51,27 @@ class TestConvertUIMessagesToLitellm:
             "type": "image_url",
             "image_url": {"url": "data:image/png;base64,abc"},
         }
+
+    def test_user_message_with_pdf(self):
+        """PDF files are converted to pdf_url intermediate format."""
+        messages = [
+            {
+                "id": "msg_1",
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "Analyze this PDF"},
+                    {"type": "file", "url": "data:application/pdf;base64,abc", "mediaType": "application/pdf", "name": "test.pdf"},
+                ],
+            }
+        ]
+        result = convert_ui_messages_to_litellm(messages)
+        assert len(result) == 1
+        assert len(result[0]["content"]) == 2
+        assert result[0]["content"][0] == {"type": "text", "text": "Analyze this PDF"}
+        # PDF should be tagged as pdf_url for later provider-aware transformation
+        assert result[0]["content"][1]["type"] == "pdf_url"
+        assert result[0]["content"][1]["pdf_url"]["url"] == "data:application/pdf;base64,abc"
+        assert result[0]["content"][1]["filename"] == "test.pdf"
 
     def test_assistant_message_with_text(self):
         messages = [
@@ -215,19 +236,19 @@ class TestExtractUserTextFromParts:
         assert extract_user_text_from_parts(parts) == ""
 
 
-class TestHasImageInParts:
+class TestHasFileInParts:
     def test_image_file(self):
         parts = [{"type": "file", "url": "data:image/png;base64,...", "mediaType": "image/png"}]
-        assert has_image_in_parts(parts) is True
+        assert has_file_in_parts(parts) is True
 
     def test_no_image(self):
         parts = [{"type": "text", "text": "Hello"}]
-        assert has_image_in_parts(parts) is False
+        assert has_file_in_parts(parts) is False
 
-    def test_pdf_file_not_image(self):
+    def test_pdf_file_detected(self):
         parts = [{"type": "file", "url": "data:application/pdf;base64,...", "mediaType": "application/pdf"}]
-        assert has_image_in_parts(parts) is False
+        assert has_file_in_parts(parts) is True
 
     def test_image_type_part(self):
         parts = [{"type": "image", "url": "data:image/png;base64,..."}]
-        assert has_image_in_parts(parts) is True
+        assert has_file_in_parts(parts) is True

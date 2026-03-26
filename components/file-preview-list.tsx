@@ -133,6 +133,10 @@ export function FilePreviewList({
                                             <span className="text-[10px] text-muted-foreground">
                                                 {dict.file.reading}
                                             </span>
+                                        ) : isPdfFile(file) ? (
+                                            <span className="text-[10px] text-green-600 font-medium">
+                                                {(file.size / 1024).toFixed(0)}KB
+                                            </span>
                                         ) : pdfInfo?.charCount ? (
                                             <span className="text-[10px] text-green-600 font-medium">
                                                 {formatCharCount(

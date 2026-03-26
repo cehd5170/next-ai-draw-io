@@ -1106,18 +1106,15 @@ export default function ChatPanel({
         let userText = baseText
 
         for (const file of files) {
-            if (isPdfFile(file)) {
-                const extracted = pdfData.get(file)
-                if (extracted?.text) {
-                    userText += `\n\n[PDF: ${file.name}]\n${extracted.text}`
-                }
-            } else if (isTextFile(file)) {
+            if (isTextFile(file)) {
+                // Text files: extract and append as text (models don't accept these natively)
                 const extracted = pdfData.get(file)
                 if (extracted?.text) {
                     userText += `\n\n[File: ${file.name}]\n${extracted.text}`
                 }
             } else if (imageParts) {
-                // Handle as image (only if imageParts array provided)
+                // Images and PDFs: send as base64 file parts directly to the model
+                // Modern models (Claude, GPT-4, Gemini) support both image and PDF input natively
                 const reader = new FileReader()
                 const dataUrl = await new Promise<string>((resolve) => {
                     reader.onload = () => resolve(reader.result as string)
@@ -1129,6 +1126,13 @@ export default function ChatPanel({
                     url: dataUrl,
                     mediaType: file.type,
                 })
+            } else if (isPdfFile(file)) {
+                // Fallback for cached response path (no imageParts array):
+                // use extracted text if available
+                const extracted = pdfData.get(file)
+                if (extracted?.text) {
+                    userText += `\n\n[PDF: ${file.name}]\n${extracted.text}`
+                }
             }
         }
 

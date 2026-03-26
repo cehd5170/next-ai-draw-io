@@ -36,10 +36,12 @@ Tool execution model
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
 import string
+import time
 from typing import Any, AsyncGenerator
 
 from app.config import Settings
@@ -91,6 +93,13 @@ def _sse(payload: dict) -> str:
 
 _SSE_DONE = "data: [DONE]\n\n"
 
+# SSE comment used as keepalive — browsers and proxies ignore it,
+# but it resets idle-timeout clocks on every intermediate hop.
+_SSE_HEARTBEAT = ": heartbeat\n\n"
+
+# Send a heartbeat if no data has been yielded for this many seconds.
+_HEARTBEAT_INTERVAL_SECONDS = 15
+
 
 def _tool_input_events(
     tool_call_id: str,
@@ -104,6 +113,127 @@ def _tool_input_events(
         _sse({"type": "tool-input-delta", "toolCallId": tool_call_id, "inputTextDelta": args_json}),
         _sse({"type": "tool-input-available", "toolCallId": tool_call_id, "toolName": tool_name, "input": parsed_args}),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Provider-aware PDF handling
+# ---------------------------------------------------------------------------
+
+# Providers where litellm accepts ``image_url`` with a ``data:application/pdf``
+# URL and translates it into the native document format automatically.
+_PDF_AS_IMAGE_URL_PROVIDERS = frozenset({
+    "anthropic", "bedrock", "google", "vertexai",
+})
+
+# Providers that follow the OpenAI ``file`` content-part format for PDFs.
+_PDF_AS_FILE_PROVIDERS = frozenset({
+    "openai", "azure",
+})
+
+
+def _transform_pdf_parts(
+    messages: list[dict[str, Any]],
+    provider: str,
+) -> list[dict[str, Any]]:
+    """
+    Convert intermediate ``pdf_url`` content parts into the format the
+    target provider actually accepts.
+
+    * Anthropic / Bedrock / Google / Vertex → ``image_url`` (litellm translates)
+    * OpenAI / Azure → ``file`` content part
+    * Others → extract base64, decode, and include as text fallback
+    """
+    import base64  # noqa: PLC0415
+
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+
+        new_content: list[dict[str, Any]] = []
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "pdf_url":
+                new_content.append(part)
+                continue
+
+            url = part["pdf_url"]["url"]
+            filename = part.get("filename", "document.pdf")
+
+            if provider in _PDF_AS_IMAGE_URL_PROVIDERS:
+                # litellm converts data:application/pdf;base64,… to
+                # the provider-native document type automatically.
+                new_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": url},
+                })
+
+            elif provider in _PDF_AS_FILE_PROVIDERS:
+                # OpenAI / Azure expect the ``file`` content-part format.
+                new_content.append({
+                    "type": "file",
+                    "file": {
+                        "filename": filename,
+                        "file_data": url,
+                    },
+                })
+
+            else:
+                # Fallback for providers that don't support PDF natively:
+                # extract text from the PDF server-side.
+                text = _extract_text_from_pdf_data_url(url)
+                if text:
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[PDF: {filename}]\n{text}",
+                    })
+                else:
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[Attached PDF: {filename} — could not extract text]",
+                    })
+
+        msg["content"] = new_content
+
+    return messages
+
+
+def _extract_text_from_pdf_data_url(data_url: str) -> str:
+    """Best-effort text extraction from a base64-encoded PDF data URL."""
+    import base64  # noqa: PLC0415
+
+    try:
+        # Strip the data URL prefix
+        if "," not in data_url:
+            return ""
+        b64_data = data_url.split(",", 1)[1]
+        pdf_bytes = base64.b64decode(b64_data)
+
+        # Try PyMuPDF (fitz) first, then pdfminer
+        try:
+            import fitz  # noqa: PLC0415  (PyMuPDF)
+
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            pages = [page.get_text() for page in doc]
+            doc.close()
+            return "\n\n".join(pages).strip()
+        except ImportError:
+            pass
+
+        try:
+            import io  # noqa: PLC0415
+
+            from pdfminer.high_level import extract_text  # noqa: PLC0415
+
+            return extract_text(io.BytesIO(pdf_bytes)).strip()
+        except ImportError:
+            pass
+
+        return ""
+    except Exception:
+        logger.warning("Failed to extract text from PDF data URL", exc_info=True)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +287,9 @@ class ChatService:
             single_system=single_system,
         )
 
+        # Transform any pdf_url parts to the correct format for this provider.
+        messages = _transform_pdf_parts(messages, model_config.provider)
+
         tool_defs = _CACHED_TOOL_DEFS
 
         # Shared tool context — xml is updated after each server-side tool call.
@@ -177,6 +310,10 @@ class ChatService:
 
         # Emit the stream-start event.
         yield _sse({"type": "start", "messageId": message_id})
+
+        # Queue used to pass heartbeat signals from the background heartbeat
+        # task back to this generator so they can be yielded as SSE comments.
+        heartbeat_queue: asyncio.Queue[None] = asyncio.Queue()
 
         for step in range(self.settings.MAX_TOOL_STEPS):
             # ------------------------------------------------------------------
@@ -215,15 +352,32 @@ class ChatService:
             reasoning_block_open = False
 
             try:
-                response_stream = await litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
+                # Use a heartbeat task to keep connection alive while waiting
+                # for the LLM provider to start streaming.
+                response_stream = await self._await_with_heartbeat(
+                    litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
+                    heartbeat_queue,
+                )
             except Exception as exc:
                 logger.error("litellm.acompletion failed: %s", exc, exc_info=True)
                 for event in self._error_events(exc):
                     yield event
                 return
 
+            # Drain any heartbeats accumulated during acompletion() await.
+            while not heartbeat_queue.empty():
+                heartbeat_queue.get_nowait()
+                yield _SSE_HEARTBEAT
+
             try:
+                last_data_time = time.monotonic()
                 async for chunk in response_stream:
+                    # Emit heartbeats if the stream has been idle.
+                    now = time.monotonic()
+                    if now - last_data_time >= _HEARTBEAT_INTERVAL_SECONDS:
+                        yield _SSE_HEARTBEAT
+                    last_data_time = now
+
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue
@@ -496,6 +650,32 @@ class ChatService:
                 success=False,
                 content=f"Tool '{name}' failed with an internal error: {exc}",
             )
+
+    @staticmethod
+    async def _await_with_heartbeat(
+        coro: Any,
+        queue: asyncio.Queue[None],
+    ) -> Any:
+        """
+        Await *coro* while pushing heartbeat signals into *queue* every
+        ``_HEARTBEAT_INTERVAL_SECONDS``.  The caller (an async generator)
+        drains the queue and yields SSE heartbeat comments to keep the
+        HTTP connection alive through proxies and load balancers.
+        """
+        async def _heartbeat_producer() -> None:
+            while True:
+                await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+                await queue.put(None)
+
+        heartbeat_task = asyncio.create_task(_heartbeat_producer())
+        try:
+            return await coro
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     @staticmethod
     def _error_events(exc: Exception) -> list[str]:

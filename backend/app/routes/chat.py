@@ -37,7 +37,7 @@ from app.services.file_processing import (
 from app.services.message_converter import (
     convert_ui_messages_to_litellm,
     extract_user_text_from_parts,
-    has_image_in_parts,
+    has_file_in_parts,
 )
 from app.services.quota_manager import QuotaManager
 
@@ -134,7 +134,7 @@ async def chat(
 
         if isinstance(parts, list):
             user_text = extract_user_text_from_parts(parts)
-            has_image = has_image_in_parts(parts)
+            has_image = has_file_in_parts(parts)
         elif isinstance(parts, str):
             user_text = parts
 

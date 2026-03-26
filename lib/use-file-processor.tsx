@@ -3,7 +3,6 @@
 import { useState } from "react"
 import { toast } from "sonner"
 import {
-    extractPdfText,
     extractTextFileContent,
     isPdfFile,
     isTextFile,
@@ -27,10 +26,27 @@ export function useFileProcessor() {
     const handleFileChange = async (newFiles: File[]) => {
         setFiles(newFiles)
 
-        // Extract text immediately for new PDF/text files
+        // Extract text for text files only.
+        // PDFs are sent as base64 directly to the model (which supports them natively),
+        // so no client-side extraction is needed.
         for (const file of newFiles) {
-            const needsExtraction =
-                (isPdfFile(file) || isTextFile(file)) && !pdfData.has(file)
+            if (isPdfFile(file)) {
+                // PDFs: just record file size for display, no text extraction
+                if (!pdfData.has(file)) {
+                    setPdfData((prev) => {
+                        const next = new Map(prev)
+                        next.set(file, {
+                            text: "",
+                            charCount: 0,
+                            isExtracting: false,
+                        })
+                        return next
+                    })
+                }
+                continue
+            }
+
+            const needsExtraction = isTextFile(file) && !pdfData.has(file)
             if (needsExtraction) {
                 // Mark as extracting
                 setPdfData((prev) => {
@@ -45,12 +61,7 @@ export function useFileProcessor() {
 
                 // Extract text asynchronously
                 try {
-                    let text: string
-                    if (isPdfFile(file)) {
-                        text = await extractPdfText(file)
-                    } else {
-                        text = await extractTextFileContent(file)
-                    }
+                    const text = await extractTextFileContent(file)
 
                     // Check character limit
                     if (text.length > MAX_EXTRACTED_CHARS) {

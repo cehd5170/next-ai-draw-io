@@ -12,12 +12,23 @@ services:
     build:
       context: ./backend
     ports: ["8000:8000"]
-    env_file: .env
+    env_file: .env          # base defaults (lower priority)
     environment:
-      # Expose on all interfaces inside the container
+      # ── These override anything in .env ──
       PORT: 8000
-      # Allow the frontend container to call us
       ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:6002,http://next-ai-draw-io:3000"
+      # ── AI Provider config ──
+      # AI_PROVIDER: "anthropic"
+      # AI_MODEL: "claude-sonnet-4-5-20250929"
+      # ANTHROPIC_API_KEY: "sk-ant-..."
+      # ── Or use OpenAI ──
+      # AI_PROVIDER: "openai"
+      # AI_MODEL: "gpt-4o"
+      # OPENAI_API_KEY: "sk-..."
+      # ── Or use Bedrock (default) ──
+      # AWS_ACCESS_KEY_ID: "AKIA..."
+      # AWS_SECRET_ACCESS_KEY: "..."
+      # AWS_REGION: "us-east-1"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
