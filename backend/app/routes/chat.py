@@ -124,6 +124,12 @@ async def chat(
     # 4. Cached-response shortcut
     #    Only for single-turn conversations on an empty / minimal canvas.
     # ------------------------------------------------------------------
+    logger.info(
+        "Chat request: %d messages, has_xml=%s, minimal_diagram=%s",
+        len(request.messages),
+        bool(request.xml),
+        is_minimal_diagram(request.xml or "") if len(request.messages) == 1 else "N/A",
+    )
     if len(request.messages) == 1 and is_minimal_diagram(request.xml or ""):
         first_msg = request.messages[0]
         user_text = ""
@@ -140,6 +146,11 @@ async def chat(
 
         cached_xml = find_cached_response(user_text, has_image)
         if cached_xml:
+            logger.info(
+                "Cache hit: user_text=%r, has_image=%s",
+                user_text[:80],
+                has_image,
+            )
 
             async def _cached_stream():
                 msg_id = _nanoid("msg_")

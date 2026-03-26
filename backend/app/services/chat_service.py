@@ -166,6 +166,16 @@ class ChatService:
             single_system=single_system,
         )
 
+        # Log the last user message content types for debugging
+        for msg in reversed(messages):
+            if msg.get("role") == "user" and isinstance(msg.get("content"), list):
+                ctypes = [
+                    (c.get("type", "?"), c.get("file", {}).get("file_data", "")[:50] if c.get("type") == "file" else "")
+                    for c in msg["content"]
+                ]
+                logger.info("Last user msg to litellm: provider=%s, content_types=%s", model_config.provider, ctypes)
+                break
+
         tool_defs = _CACHED_TOOL_DEFS
 
         # Shared tool context — xml is updated after each server-side tool call.

@@ -12,6 +12,7 @@ Creates and configures the FastAPI app including:
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -20,6 +21,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.middleware.error_handler import unhandled_exception_handler
+
+# Configure root logger so that app.* loggers can emit INFO messages.
+# Without this, Python's default WARNING level silences all logger.info() calls.
+_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _log_level, logging.INFO),
+    format="%(levelname)s:%(name)s:%(message)s",
+)
 
 logger = logging.getLogger(__name__)
 

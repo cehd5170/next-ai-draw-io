@@ -88,6 +88,9 @@ def convert_ui_messages_to_litellm(messages: list[dict[str, Any]]) -> list[dict[
         if role == "user":
             converted = _convert_user_message(parts)
             if converted:
+                # Log content types for debugging file handling
+                ctypes = [c.get("type", "?") for c in converted]
+                logger.info("User message converted: %d parts, types=%s", len(converted), ctypes)
                 result.append({"role": "user", "content": converted})
 
         elif role == "assistant":
@@ -129,6 +132,13 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
             # File parts may be images, PDFs, or other files.
             url = part.get("url", "")
             media_type = part.get("mediaType", part.get("mimeType", ""))
+            logger.info(
+                "File part: mediaType=%r, has_url=%s, url_prefix=%s, name=%r",
+                media_type,
+                bool(url),
+                url[:60] if url else "",
+                part.get("name"),
+            )
 
             if url and media_type and media_type.startswith("image/"):
                 content.append({
