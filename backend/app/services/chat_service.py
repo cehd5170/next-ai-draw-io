@@ -116,127 +116,6 @@ def _tool_input_events(
 
 
 # ---------------------------------------------------------------------------
-# Provider-aware PDF handling
-# ---------------------------------------------------------------------------
-
-# Providers where litellm accepts ``image_url`` with a ``data:application/pdf``
-# URL and translates it into the native document format automatically.
-_PDF_AS_IMAGE_URL_PROVIDERS = frozenset({
-    "anthropic", "bedrock", "google", "vertexai",
-})
-
-# Providers that follow the OpenAI ``file`` content-part format for PDFs.
-_PDF_AS_FILE_PROVIDERS = frozenset({
-    "openai", "azure",
-})
-
-
-def _transform_pdf_parts(
-    messages: list[dict[str, Any]],
-    provider: str,
-) -> list[dict[str, Any]]:
-    """
-    Convert intermediate ``pdf_url`` content parts into the format the
-    target provider actually accepts.
-
-    * Anthropic / Bedrock / Google / Vertex → ``image_url`` (litellm translates)
-    * OpenAI / Azure → ``file`` content part
-    * Others → extract base64, decode, and include as text fallback
-    """
-    import base64  # noqa: PLC0415
-
-    for msg in messages:
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content")
-        if not isinstance(content, list):
-            continue
-
-        new_content: list[dict[str, Any]] = []
-        for part in content:
-            if not isinstance(part, dict) or part.get("type") != "pdf_url":
-                new_content.append(part)
-                continue
-
-            url = part["pdf_url"]["url"]
-            filename = part.get("filename", "document.pdf")
-
-            if provider in _PDF_AS_IMAGE_URL_PROVIDERS:
-                # litellm converts data:application/pdf;base64,… to
-                # the provider-native document type automatically.
-                new_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": url},
-                })
-
-            elif provider in _PDF_AS_FILE_PROVIDERS:
-                # OpenAI / Azure expect the ``file`` content-part format.
-                new_content.append({
-                    "type": "file",
-                    "file": {
-                        "filename": filename,
-                        "file_data": url,
-                    },
-                })
-
-            else:
-                # Fallback for providers that don't support PDF natively:
-                # extract text from the PDF server-side.
-                text = _extract_text_from_pdf_data_url(url)
-                if text:
-                    new_content.append({
-                        "type": "text",
-                        "text": f"[PDF: {filename}]\n{text}",
-                    })
-                else:
-                    new_content.append({
-                        "type": "text",
-                        "text": f"[Attached PDF: {filename} — could not extract text]",
-                    })
-
-        msg["content"] = new_content
-
-    return messages
-
-
-def _extract_text_from_pdf_data_url(data_url: str) -> str:
-    """Best-effort text extraction from a base64-encoded PDF data URL."""
-    import base64  # noqa: PLC0415
-
-    try:
-        # Strip the data URL prefix
-        if "," not in data_url:
-            return ""
-        b64_data = data_url.split(",", 1)[1]
-        pdf_bytes = base64.b64decode(b64_data)
-
-        # Try PyMuPDF (fitz) first, then pdfminer
-        try:
-            import fitz  # noqa: PLC0415  (PyMuPDF)
-
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            pages = [page.get_text() for page in doc]
-            doc.close()
-            return "\n\n".join(pages).strip()
-        except ImportError:
-            pass
-
-        try:
-            import io  # noqa: PLC0415
-
-            from pdfminer.high_level import extract_text  # noqa: PLC0415
-
-            return extract_text(io.BytesIO(pdf_bytes)).strip()
-        except ImportError:
-            pass
-
-        return ""
-    except Exception:
-        logger.warning("Failed to extract text from PDF data URL", exc_info=True)
-        return ""
-
-
-# ---------------------------------------------------------------------------
 # ChatService
 # ---------------------------------------------------------------------------
 
@@ -286,9 +165,6 @@ class ChatService:
             messages=list(messages or []),
             single_system=single_system,
         )
-
-        # Transform any pdf_url parts to the correct format for this provider.
-        messages = _transform_pdf_parts(messages, model_config.provider)
 
         tool_defs = _CACHED_TOOL_DEFS
 

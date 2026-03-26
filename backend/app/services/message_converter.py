@@ -136,12 +136,14 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
                     "image_url": {"url": url},
                 })
             elif url and media_type == "application/pdf":
-                # PDFs: keep as a tagged dict so the chat service can
-                # transform to the correct provider-specific format later.
+                # PDFs: send as image_url with base64 data URL.
+                # litellm detects the application/pdf MIME type and
+                # converts to the provider-native format automatically
+                # (e.g. Anthropic document, Bedrock document block,
+                # Gemini inline_data).
                 content.append({
-                    "type": "pdf_url",
-                    "pdf_url": {"url": url},
-                    "filename": part.get("name", "document.pdf"),
+                    "type": "image_url",
+                    "image_url": {"url": url},
                 })
             elif url:
                 # Other non-image files: include as text with metadata.

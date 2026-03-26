@@ -1125,6 +1125,7 @@ export default function ChatPanel({
                     type: "file",
                     url: dataUrl,
                     mediaType: file.type,
+                    name: file.name,
                 })
             } else if (isPdfFile(file)) {
                 // Fallback for cached response path (no imageParts array):
