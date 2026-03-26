@@ -313,49 +313,13 @@ class ChatService:
             reasoning_id: str | None = None
             reasoning_block_open = False
 
-            # Check if messages contain PDF file blocks (for fallback logic).
-            has_pdf_file_blocks = any(
-                isinstance(p, dict) and p.get("type") == "file"
-                for msg in messages
-                if msg.get("role") == "user" and isinstance(msg.get("content"), list)
-                for p in msg["content"]
-            )
-
             try:
                 # Use a heartbeat task to keep connection alive while waiting
                 # for the LLM provider to start streaming.
-                # Add a timeout for PDF requests to prevent indefinite hangs
-                # with models that silently fail on PDF input.
-                pdf_timeout = 120 if has_pdf_file_blocks else None
-                coro = litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
-                if pdf_timeout:
-                    coro = asyncio.wait_for(coro, timeout=pdf_timeout)
                 response_stream = await self._await_with_heartbeat(
-                    coro,
+                    litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
                     heartbeat_queue,
                 )
-            except asyncio.TimeoutError:
-                if has_pdf_file_blocks:
-                    # PDF input timed out — fall back to text extraction and retry.
-                    logger.warning(
-                        "PDF file input timed out after %ds — falling back to text extraction",
-                        pdf_timeout,
-                    )
-                    _convert_pdf_file_blocks_to_text(messages)
-                    try:
-                        response_stream = await self._await_with_heartbeat(
-                            litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
-                            heartbeat_queue,
-                        )
-                    except Exception as exc2:
-                        logger.error("litellm.acompletion (text fallback) failed: %s", exc2, exc_info=True)
-                        for event in self._error_events(exc2):
-                            yield event
-                        return
-                else:
-                    for event in self._error_events(Exception("Request timed out")):
-                        yield event
-                    return
             except Exception as exc:
                 logger.error("litellm.acompletion failed: %s", exc, exc_info=True)
                 for event in self._error_events(exc):
