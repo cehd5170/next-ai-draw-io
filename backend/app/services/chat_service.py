@@ -40,6 +40,7 @@ import asyncio
 from contextlib import suppress
 import json
 import logging
+from pathlib import Path
 import random
 import string
 from typing import Any, AsyncGenerator
@@ -51,6 +52,9 @@ from app.services.json_repair import get_fallback_tool_input, repair_tool_call_j
 from app.tools.registry import ToolContext, ToolResult, dispatch_tool, get_tool_definitions
 
 logger = logging.getLogger(__name__)
+_SHAPE_LIBRARY_DIR = str(
+    Path(__file__).resolve().parents[2] / "docs" / "shape-libraries"
+)
 
 # Cache tool definitions at module level — the registry never changes at runtime.
 _CACHED_TOOL_DEFS: list[dict] = []
@@ -253,6 +257,7 @@ class ChatService:
         system_prompt: str,
         xml_context: str,
         current_xml: str = "",
+        shape_library_dir: str = _SHAPE_LIBRARY_DIR,
     ) -> AsyncGenerator[str, None]:
         """
         Yield UIMessageStream-formatted SSE events for a single chat turn.
@@ -291,7 +296,7 @@ class ChatService:
         # Shared tool context — xml is updated after each server-side tool call.
         tool_context = ToolContext(
             current_xml=current_xml or "",
-            shape_library_dir="",  # filled by route if needed
+            shape_library_dir=shape_library_dir,
             settings=self.settings,
         )
 

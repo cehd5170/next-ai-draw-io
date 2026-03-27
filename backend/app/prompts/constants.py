@@ -14,6 +14,10 @@ SHAPE_LIBRARY_NAMES: list[str] = [
     "bpmn",
     "material_design",
     "webicons",
+    "alibaba_cloud",
+    "openstack",
+    "salesforce",
+    "vvd",
     "network",
     "ios7",
     "android",
@@ -30,6 +34,15 @@ SHAPE_LIBRARY_NAMES: list[str] = [
     "veeam",
     "rack",
     "office",
+    "arrows2",
+    "sitemap",
+    "citrix",
+    "sap",
+    "mscae",
+    "atlassian",
+    "fluidpower",
+    "pid",
+    "cabinets",
 ]
 
 # JSON Schema definitions for all four diagram tools.
@@ -48,7 +61,8 @@ TOOL_SCHEMAS: dict[str, dict] = {
                     "type": "string",
                     "description": (
                         "draw.io XML containing ONLY mxCell elements (no wrapper tags). "
-                        "IDs must start from '2'. Root cells (id='0', id='1') are added automatically."
+                        "IDs must start from '2'. Root cells (id='0', id='1') are added automatically. "
+                        "Prefer containers, icon/library shapes, and varied shape types over generic text-only boxes."
                     ),
                 }
             },
@@ -134,7 +148,8 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "description": (
             "Get shape/icon library documentation. Use this to discover available icon shapes "
             "(AWS, Azure, GCP, Kubernetes, Material Design, etc.) before creating diagrams with "
-            "special icons. ALWAYS call this before using any icon library — never guess the syntax."
+            "special icons. ALWAYS call this before using any icon library — never guess the syntax. "
+            "This is especially important for requests that mention AWS, Azure, GCP, Kubernetes, or icons."
         ),
         "parameters": {
             "type": "object",

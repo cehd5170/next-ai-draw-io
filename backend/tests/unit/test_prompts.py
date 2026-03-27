@@ -140,6 +140,12 @@ class TestGetSystemPrompt:
         prompt = get_system_prompt("gpt-4o")
         assert isinstance(prompt, str) and len(prompt) > 100
 
+    def test_prompt_discourages_generic_text_box_layouts(self):
+        """The prompt should explicitly discourage wall-of-text box diagrams."""
+        prompt = get_system_prompt("gpt-4o")
+        assert "generic rounded rectangles" in prompt
+        assert "prefer real library icons plus grouping containers" in prompt
+
 
 class TestBuildXmlContext:
     def test_with_current_xml_only(self):

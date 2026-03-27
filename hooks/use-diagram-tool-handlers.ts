@@ -1,5 +1,4 @@
 import type { MutableRefObject } from "react"
-import { useRef } from "react"
 import type { DiagramOperation } from "@/components/chat/types"
 import type {
     ValidationState,
@@ -38,6 +37,8 @@ type AddToolOutputParams = AddToolOutputSuccess | AddToolOutputError
 type AddToolOutputFn = (params: AddToolOutputParams) => void
 
 const MAX_VALIDATION_RETRIES = 3
+const VALIDATION_CAPTURE_TIMEOUT_MS = 4000
+const VALIDATION_REQUEST_TIMEOUT_MS = 8000
 
 // Type for the validation function passed from useValidateDiagram hook
 type ValidateDiagramFn = (
@@ -82,8 +83,27 @@ export function useDiagramToolHandlers({
     sessionId,
     onValidationStateChange,
 }: UseDiagramToolHandlersParams) {
-    // Track validation retry count per tool call
-    const validationRetryCountRef = useRef<Map<string, number>>(new Map())
+    const withTimeout = async <T,>(
+        promise: Promise<T>,
+        timeoutMs: number,
+        label: string,
+    ): Promise<T> => {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null
+        try {
+            return await Promise.race([
+                promise,
+                new Promise<T>((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                        reject(new Error(`${label} timed out after ${timeoutMs}ms`))
+                    }, timeoutMs)
+                }),
+            ])
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId)
+            }
+        }
+    }
 
     // Helper to update validation state
     const updateValidationState = (
@@ -205,170 +225,113 @@ ${finalXml}
             // Success - diagram will be rendered by chat-message-display
             if (DEBUG) {
                 console.log(
-                    "[display_diagram] Success! Checking if VLM validation is enabled...",
+                    "[display_diagram] Success! Returning tool output immediately.",
                 )
             }
 
-            // VLM validation after successful display
-            if (
-                enableVlmValidation &&
-                captureValidationPng &&
-                validateDiagram
-            ) {
-                let capturedPngData: string | null = null
-                try {
-                    // Notify UI that we're starting capture
-                    updateValidationState(toolCall.toolCallId, "capturing")
-
-                    // Small delay (100ms) to allow diagram rendering to complete before capture.
-                    // This is a best-effort heuristic and may need adjustment for complex diagrams or slower devices.
-                    await new Promise((resolve) => setTimeout(resolve, 100))
-
-                    capturedPngData = await captureValidationPng()
-                    if (capturedPngData) {
-                        if (DEBUG) {
-                            console.log(
-                                "[display_diagram] Captured PNG for validation",
-                            )
-                        }
-
-                        const retryCount =
-                            validationRetryCountRef.current.get(
-                                toolCall.toolCallId,
-                            ) || 0
-
-                        // Notify UI that we're validating (include the image)
-                        updateValidationState(
-                            toolCall.toolCallId,
-                            "validating",
-                            {
-                                attempt: retryCount + 1,
-                                maxAttempts: MAX_VALIDATION_RETRIES,
-                                imageData: capturedPngData,
-                            },
-                        )
-
-                        const result = await validateDiagram(
-                            capturedPngData,
-                            sessionId,
-                        )
-
-                        if (!result.valid) {
-                            if (retryCount < MAX_VALIDATION_RETRIES) {
-                                validationRetryCountRef.current.set(
-                                    toolCall.toolCallId,
-                                    retryCount + 1,
-                                )
-
-                                const feedback =
-                                    formatValidationFeedback(result)
-                                if (DEBUG) {
-                                    console.log(
-                                        `[display_diagram] Validation failed (attempt ${retryCount + 1}/${MAX_VALIDATION_RETRIES}):`,
-                                        result.issues,
-                                    )
-                                }
-
-                                // Notify UI of validation failure (include the image)
-                                updateValidationState(
-                                    toolCall.toolCallId,
-                                    "failed",
-                                    {
-                                        attempt: retryCount + 1,
-                                        maxAttempts: MAX_VALIDATION_RETRIES,
-                                        result,
-                                        imageData: capturedPngData,
-                                    },
-                                )
-
-                                addToolOutput({
-                                    tool: "display_diagram",
-                                    toolCallId: toolCall.toolCallId,
-                                    state: "output-error",
-                                    errorText: `[Validation attempt ${retryCount + 1}/${MAX_VALIDATION_RETRIES}]\n${feedback}`,
-                                })
-                                return
-                            } else {
-                                // Max retries reached - accept the diagram with warning
-                                if (DEBUG) {
-                                    console.log(
-                                        "[display_diagram] Max validation retries reached, accepting diagram",
-                                    )
-                                }
-                                validationRetryCountRef.current.delete(
-                                    toolCall.toolCallId,
-                                )
-
-                                // Notify UI that we're accepting with issues (include the image)
-                                updateValidationState(
-                                    toolCall.toolCallId,
-                                    "skipped",
-                                    { result, imageData: capturedPngData },
-                                )
-
-                                addToolOutput({
-                                    tool: "display_diagram",
-                                    toolCallId: toolCall.toolCallId,
-                                    output: "Diagram displayed (validation issues noted but max retries reached).",
-                                })
-                                return
-                            }
-                        } else {
-                            // Validation passed - clean up retry count
-                            validationRetryCountRef.current.delete(
-                                toolCall.toolCallId,
-                            )
-                            if (DEBUG) {
-                                console.log(
-                                    "[display_diagram] Validation passed!",
-                                )
-                            }
-
-                            // Notify UI of success (include the image)
-                            // Use "success_with_warnings" if valid but has issues
-                            const hasWarnings = result.issues.length > 0
-                            updateValidationState(
-                                toolCall.toolCallId,
-                                hasWarnings
-                                    ? "success_with_warnings"
-                                    : "success",
-                                { result, imageData: capturedPngData },
-                            )
-                        }
-                    } else {
-                        // PNG capture failed - skip validation
-                        updateValidationState(toolCall.toolCallId, "skipped")
-                    }
-                } catch (error) {
-                    // VLM validation error - log but don't block the user
-                    console.warn(
-                        "[display_diagram] VLM validation error:",
-                        error,
-                    )
-                    updateValidationState(toolCall.toolCallId, "error", {
-                        error:
-                            error instanceof Error
-                                ? error.message
-                                : "Validation failed",
-                        imageData: capturedPngData || undefined,
-                    })
-                }
-            }
-
-            if (DEBUG) {
-                console.log(
-                    "[display_diagram] Adding tool output with state: output-available",
-                )
-            }
             addToolOutput({
                 tool: "display_diagram",
                 toolCallId: toolCall.toolCallId,
                 output: "Successfully displayed the diagram.",
             })
-            if (DEBUG) {
-                console.log(
-                    "[display_diagram] Tool output added. Diagram should be visible now.",
-                )
+
+            // VLM validation runs in the background so the tool round-trip
+            // does not stall the chat UI after the diagram is already visible.
+            if (
+                enableVlmValidation &&
+                captureValidationPng &&
+                validateDiagram
+            ) {
+                void (async () => {
+                    let capturedPngData: string | null = null
+                    try {
+                        updateValidationState(toolCall.toolCallId, "capturing")
+
+                        await new Promise((resolve) => setTimeout(resolve, 100))
+
+                        capturedPngData = await withTimeout(
+                            captureValidationPng(),
+                            VALIDATION_CAPTURE_TIMEOUT_MS,
+                            "Diagram capture",
+                        )
+                        if (!capturedPngData) {
+                            updateValidationState(
+                                toolCall.toolCallId,
+                                "skipped",
+                            )
+                            return
+                        }
+
+                        if (DEBUG) {
+                            console.log(
+                                "[display_diagram] Captured PNG for background validation",
+                            )
+                        }
+
+                        updateValidationState(
+                            toolCall.toolCallId,
+                            "validating",
+                            {
+                                attempt: 1,
+                                maxAttempts: MAX_VALIDATION_RETRIES,
+                                imageData: capturedPngData,
+                            },
+                        )
+
+                        const result = await withTimeout(
+                            validateDiagram(capturedPngData, sessionId),
+                            VALIDATION_REQUEST_TIMEOUT_MS,
+                            "Diagram validation",
+                        )
+
+                        if (!result.valid) {
+                            if (DEBUG) {
+                                console.log(
+                                    "[display_diagram] Background validation found issues:",
+                                    formatValidationFeedback(result),
+                                )
+                            }
+                            updateValidationState(toolCall.toolCallId, "failed", {
+                                attempt: 1,
+                                maxAttempts: MAX_VALIDATION_RETRIES,
+                                result,
+                                imageData: capturedPngData,
+                            })
+                            return
+                        }
+
+                        const hasWarnings = result.issues.length > 0
+                        updateValidationState(
+                            toolCall.toolCallId,
+                            hasWarnings
+                                ? "success_with_warnings"
+                                : "success",
+                            { result, imageData: capturedPngData },
+                        )
+                    } catch (error) {
+                        console.warn(
+                            "[display_diagram] VLM validation error:",
+                            error,
+                        )
+                        const message =
+                            error instanceof Error
+                                ? error.message
+                                : "Validation failed"
+                        const timedOut = message
+                            .toLowerCase()
+                            .includes("timed out")
+                        updateValidationState(
+                            toolCall.toolCallId,
+                            timedOut ? "skipped" : "error",
+                            timedOut
+                                ? { imageData: capturedPngData || undefined }
+                                : {
+                                      error: message,
+                                      imageData: capturedPngData || undefined,
+                                  },
+                        )
+                    }
+                })()
             }
         }
     }

@@ -98,7 +98,8 @@ export function ValidationCard({
     const showImproveButton =
         onImproveWithSuggestions &&
         state.result &&
-        (state.status === "success" ||
+        (state.status === "failed" ||
+            state.status === "success" ||
             state.status === "success_with_warnings" ||
             state.status === "skipped") &&
         (state.result.issues.length > 0 || state.result.suggestions.length > 0)

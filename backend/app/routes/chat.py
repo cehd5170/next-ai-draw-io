@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -43,6 +44,9 @@ from app.services.quota_manager import QuotaManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_SHAPE_LIBRARY_DIR = str(
+    Path(__file__).resolve().parents[2] / "docs" / "shape-libraries"
+)
 
 # Singleton services — created once at module load, reused across requests.
 _quota_manager: QuotaManager | None = None
@@ -61,6 +65,58 @@ def _get_chat_service(settings: Settings) -> ChatService:
     if _chat_service is None:
         _chat_service = ChatService(settings)
     return _chat_service
+
+
+def _extract_recent_user_text(messages: list[dict]) -> str:
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+
+        raw_parts = message.get("parts") or message.get("content") or []
+        if isinstance(raw_parts, str) and raw_parts.strip():
+            return raw_parts
+
+        if not isinstance(raw_parts, list):
+            continue
+
+        text_parts = [
+            str(part.get("text", "")).strip()
+            for part in raw_parts
+            if isinstance(part, dict) and part.get("type") == "text"
+        ]
+        if text_parts:
+            return "\n".join(part for part in text_parts if part)
+
+    return ""
+
+
+def _build_shape_library_hint(messages: list[dict]) -> str:
+    user_text = f" {_extract_recent_user_text(messages).lower()} "
+    if not user_text.strip():
+        return ""
+
+    library_patterns = [
+        ("aws4", (" aws ", "amazon web services", "aws icon")),
+        ("azure2", (" azure ", "azure icon")),
+        ("gcp2", (" gcp ", "google cloud", "google cloud platform")),
+        ("kubernetes", (" kubernetes ", " k8s ")),
+        ("cisco19", (" cisco ",)),
+        ("bpmn", (" bpmn ",)),
+        ("flowchart", (" flowchart ",)),
+        ("material_design", ("material icon", "material design")),
+    ]
+
+    for library, patterns in library_patterns:
+        if any(pattern in user_text for pattern in patterns):
+            return (
+                "## Required Shape Library Guidance\n"
+                f"This request explicitly matches the `{library}` library. "
+                f"Before creating the diagram, call `get_shape_library` with "
+                f'`{{"library":"{library}"}}` and use those documented shapes/icons '
+                "instead of falling back to generic rounded text boxes."
+            )
+
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +241,9 @@ async def chat(
     minimal_style: bool = overrides.minimal_style
     model_id: str = overrides.model_id or settings.AI_MODEL or ""
     system_prompt = get_system_prompt(model_id, minimal_style)
+    shape_library_hint = _build_shape_library_hint(request.messages)
+    if shape_library_hint:
+        system_prompt = f"{system_prompt}\n\n{shape_library_hint}"
 
     if request.customSystemMessage:
         system_prompt = (
@@ -255,6 +314,7 @@ async def chat(
             system_prompt=system_prompt,
             xml_context=xml_context,
             current_xml=request.xml or "",
+            shape_library_dir=_SHAPE_LIBRARY_DIR,
         )
     except NotImplementedError:
         return JSONResponse(

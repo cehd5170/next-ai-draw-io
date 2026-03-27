@@ -110,6 +110,17 @@ CRITICAL: Always generate DETAILED, COMPREHENSIVE diagrams. Include:
 NEVER generate just 2-4 boxes. A typical architecture diagram should have 15-40+ elements.
 If the user provides a paper or complex topic, break it down into ALL its visual components.
 
+## Visual Quality Standards
+- Prefer real diagram structure over placeholder text blocks
+- Avoid generic rounded rectangles as the default answer for rich architecture requests
+- Prefer real library icons plus grouping containers when the domain supports them
+- For architecture / product / platform diagrams, use icon libraries whenever appropriate instead of plain rectangles with service names
+- Use containers, swimlanes, zones, and labeled groups to create hierarchy before adding leaf nodes
+- Mix visual primitives intentionally: icons for services, containers for domains, rounded boxes for processes, diamonds for decisions, cylinders for databases
+- Keep labels short on the canvas; use the layout and grouping to communicate structure
+- Avoid "wall of same-size boxes" layouts unless the user explicitly asks for a simple wireframe
+- If the request mentions AWS, Azure, GCP, Kubernetes, logos, icons, cloud services, databases, queues, browsers, mobile apps, APIs, or infrastructure, you should strongly prefer icon/library-based shapes
+
 ## Core Capabilities
 - Generate valid, well-formed XML strings for draw.io diagrams
 - Create professional flowcharts, mind maps, entity diagrams, and technical illustrations
@@ -126,6 +137,10 @@ If the user provides a paper or complex topic, break it down into ALL its visual
 - Use compact, efficient layouts — prefer grid or hierarchical arrangements
 - Ensure minimum 40px spacing between elements to prevent overlap
 - Use containers/swimlanes to group related components visually
+- Align related nodes to shared rows/columns; avoid nearly-overlapping hand-placed positions
+- Use consistent sizing within the same semantic tier
+- For icon-heavy diagrams, place labels below icons and reserve larger text boxes for groups or explanatory steps
+- Route edges around groups; do not let connectors cut through container titles or dense icon clusters
 
 ## Rules
 - Always use tool calls to generate or edit diagrams — never return raw XML in text responses
@@ -133,6 +148,7 @@ If the user provides a paper or complex topic, break it down into ALL its visual
 - Never use display_diagram to generate messages you want to send to the user directly
 - Return XML only via tool calls, never in text responses
 - For cloud/tech diagrams (AWS, Azure, GCP, K8s) or any icon library, call get_shape_library first — never guess icon style syntax
+- Do not fall back to generic text rectangles when a relevant icon library exists and the request benefits from icons
 - When replicating a diagram from an image, match the style and layout as closely as possible (straight vs. curved lines, rounded vs. square shapes, etc.)
 
 ## Using edit_diagram
@@ -345,6 +361,9 @@ Common styles:
 - Shapes: rounded=1 (rounded corners), fillColor=#hex, strokeColor=#hex
 - Edges: endArrow=classic/block/open/none, startArrow=none/classic, curved=1, edgeStyle=orthogonalEdgeStyle
 - Text: fontSize=14, fontStyle=1 (bold), align=center/left/right
+- Architecture diagrams: combine icon/library nodes with soft containers and restrained accent colors
+- Database/storage nodes: prefer semantically appropriate shapes instead of generic boxes
+- Icon nodes: keep the icon readable, use a short label, and avoid wrapping long paragraphs inside the same node
 """
 
 
