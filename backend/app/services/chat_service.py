@@ -37,11 +37,11 @@ Tool execution model
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 import random
 import string
-import time
 from typing import Any, AsyncGenerator
 
 from app.config import Settings
@@ -307,10 +307,6 @@ class ChatService:
         # Emit the stream-start event.
         yield _sse({"type": "start", "messageId": message_id})
 
-        # Queue used to pass heartbeat signals from the background heartbeat
-        # task back to this generator so they can be yielded as SSE comments.
-        heartbeat_queue: asyncio.Queue[None] = asyncio.Queue()
-
         for step in range(self.settings.MAX_TOOL_STEPS):
             # ------------------------------------------------------------------
             # Build litellm call kwargs
@@ -348,32 +344,30 @@ class ChatService:
             reasoning_block_open = False
 
             try:
-                # Use a heartbeat task to keep connection alive while waiting
-                # for the LLM provider to start streaming.
-                response_stream = await self._await_with_heartbeat(
+                response_stream = None
+                async for event_type, payload in self._await_with_sse_heartbeats(
                     litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
-                    heartbeat_queue,
-                )
+                ):
+                    if event_type == "heartbeat":
+                        yield _SSE_HEARTBEAT
+                        continue
+                    response_stream = payload
+                    break
             except Exception as exc:
                 logger.error("litellm.acompletion failed: %s", exc, exc_info=True)
                 for event in self._error_events(exc):
                     yield event
                 return
 
-            # Drain any heartbeats accumulated during acompletion() await.
-            while not heartbeat_queue.empty():
-                heartbeat_queue.get_nowait()
-                yield _SSE_HEARTBEAT
-
             try:
-                last_data_time = time.monotonic()
-                async for chunk in response_stream:
-                    # Emit heartbeats if the stream has been idle.
-                    now = time.monotonic()
-                    if now - last_data_time >= _HEARTBEAT_INTERVAL_SECONDS:
+                async for event_type, payload in self._iterate_with_sse_heartbeats(
+                    response_stream,
+                ):
+                    if event_type == "heartbeat":
                         yield _SSE_HEARTBEAT
-                    last_data_time = now
+                        continue
 
+                    chunk = payload
                     delta = chunk.choices[0].delta if chunk.choices else None
                     if delta is None:
                         continue
@@ -648,30 +642,67 @@ class ChatService:
             )
 
     @staticmethod
-    async def _await_with_heartbeat(
-        coro: Any,
-        queue: asyncio.Queue[None],
-    ) -> Any:
+    async def _await_with_sse_heartbeats(
+        awaitable: Any,
+    ) -> AsyncGenerator[tuple[str, Any], None]:
         """
-        Await *coro* while pushing heartbeat signals into *queue* every
-        ``_HEARTBEAT_INTERVAL_SECONDS``.  The caller (an async generator)
-        drains the queue and yields SSE heartbeat comments to keep the
-        HTTP connection alive through proxies and load balancers.
-        """
-        async def _heartbeat_producer() -> None:
-            while True:
-                await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
-                await queue.put(None)
+        Yield heartbeat ticks while awaiting a single provider call result.
 
-        heartbeat_task = asyncio.create_task(_heartbeat_producer())
+        This keeps the HTTP SSE connection active even before the provider has
+        returned the streaming iterator.
+        """
+        task = asyncio.ensure_future(awaitable)
         try:
-            return await coro
+            while True:
+                done, _ = await asyncio.wait(
+                    {task},
+                    timeout=_HEARTBEAT_INTERVAL_SECONDS,
+                )
+                if done:
+                    yield ("result", await task)
+                    return
+                yield ("heartbeat", None)
         finally:
-            heartbeat_task.cancel()
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    @staticmethod
+    async def _iterate_with_sse_heartbeats(
+        stream: Any,
+    ) -> AsyncGenerator[tuple[str, Any], None]:
+        """
+        Yield heartbeat ticks while waiting for the next provider stream chunk.
+
+        Providers can pause for long thinking/tool-planning intervals between
+        chunks.  During those gaps we still need to emit SSE comments so
+        browsers and proxies do not treat the connection as idle.
+        """
+        iterator = stream.__aiter__()
+        while True:
+            next_chunk_task = asyncio.ensure_future(iterator.__anext__())
             try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
+                while True:
+                    done, _ = await asyncio.wait(
+                        {next_chunk_task},
+                        timeout=_HEARTBEAT_INTERVAL_SECONDS,
+                    )
+                    if done:
+                        break
+                    yield ("heartbeat", None)
+
+                try:
+                    chunk = await next_chunk_task
+                except StopAsyncIteration:
+                    return
+
+                yield ("chunk", chunk)
+            finally:
+                if not next_chunk_task.done():
+                    next_chunk_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await next_chunk_task
 
     @staticmethod
     def _error_events(exc: Exception) -> list[str]:

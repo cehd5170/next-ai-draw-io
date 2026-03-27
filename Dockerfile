@@ -35,6 +35,10 @@ ENV NEXT_PUBLIC_SHOW_ABOUT_AND_NOTICE=${NEXT_PUBLIC_SHOW_ABOUT_AND_NOTICE}
 ARG NEXT_PUBLIC_BASE_PATH=""
 ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
 
+# Build-time argument for direct browser -> Python backend calls.
+ARG NEXT_PUBLIC_PYTHON_API_URL=""
+ENV NEXT_PUBLIC_PYTHON_API_URL=${NEXT_PUBLIC_PYTHON_API_URL}
+
 # Control sponsorship and self-hosting messaging in quota notifications.
 # Set NEXT_PUBLIC_SELFHOSTED="true" in self-hosted deployments to hide sponsorship/self-host links and related text in quota popups.
 ARG NEXT_PUBLIC_SELFHOSTED=""
@@ -75,4 +79,3 @@ ENV HOSTNAME="0.0.0.0"
 
 # Start the application (HOSTNAME override needed for AWS App Runner)
 CMD ["sh", "-c", "HOSTNAME=0.0.0.0 exec node server.js"]
-

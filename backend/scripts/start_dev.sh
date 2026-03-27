@@ -67,9 +67,10 @@ echo "  Directory: ${REPO_ROOT}"
 
 cd "${REPO_ROOT}"
 
-# PYTHON_API_URL tells next.config.ts to proxy /api/* to the backend.
+# NEXT_PUBLIC_PYTHON_API_URL makes the browser call the Python backend
+# directly, which is more reliable for long-lived SSE chat streams.
 # PORT tells the Next.js dev server which port to listen on.
-PYTHON_API_URL="http://localhost:${BACKEND_PORT}" \
+NEXT_PUBLIC_PYTHON_API_URL="http://localhost:${BACKEND_PORT}" \
 PORT="${FRONTEND_PORT}" \
     npm run dev \
     &

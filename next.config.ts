@@ -18,17 +18,22 @@ const nextConfig: NextConfig = {
     outputFileTracingIncludes: {
         "*": ["./instrumentation.ts"],
     },
-    // Proxy /api/* to the Python backend.
-    // PYTHON_API_URL is required — the frontend has no local API routes;
-    // all API logic lives in the FastAPI backend.
+    // Proxy /api/* to the Python backend when running in server-proxy mode.
+    // In direct browser mode (NEXT_PUBLIC_PYTHON_API_URL), skip rewrites so
+    // long-lived SSE requests avoid an extra proxy hop.
     async rewrites() {
         const pythonApiUrl = process.env.PYTHON_API_URL
+        const directPythonApiUrl = process.env.NEXT_PUBLIC_PYTHON_API_URL
+
+        if (directPythonApiUrl) {
+            return []
+        }
+
         if (!pythonApiUrl) {
             throw new Error(
-                "PYTHON_API_URL environment variable is required. " +
+                "Either PYTHON_API_URL or NEXT_PUBLIC_PYTHON_API_URL must be set. " +
                     "The frontend has no local API routes — all API requests " +
-                    "are proxied to the Python backend. Set PYTHON_API_URL " +
-                    "(e.g. http://backend:8000) in your environment or docker-compose.",
+                    "must reach the Python backend through one of those paths.",
             )
         }
         return [

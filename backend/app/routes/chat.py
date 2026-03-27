@@ -172,7 +172,11 @@ async def chat(
             return StreamingResponse(
                 _cached_stream(),
                 media_type="text/event-stream",
-                headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+                headers={
+                    "X-Accel-Buffering": "no",
+                    "Cache-Control": "no-cache, no-store, no-transform",
+                    "Connection": "keep-alive",
+                },
             )
 
     # ------------------------------------------------------------------
@@ -261,5 +265,9 @@ async def chat(
     return StreamingResponse(
         stream,
         media_type="text/event-stream",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache, no-store, no-transform",
+            "Connection": "keep-alive",
+        },
     )
