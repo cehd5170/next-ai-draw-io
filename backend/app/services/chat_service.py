@@ -311,6 +311,7 @@ class ChatService:
 
         # Emit the stream-start event.
         yield _sse({"type": "start", "messageId": message_id})
+        diagram_retry_used = False
 
         for step in range(self.settings.MAX_TOOL_STEPS):
             # ------------------------------------------------------------------
@@ -459,6 +460,33 @@ class ChatService:
             # No tool calls → final text response, exit loop.
             # ------------------------------------------------------------------
             if not tool_calls_acc:
+                if (
+                    not diagram_retry_used
+                    and self._should_retry_for_missing_diagram(
+                        messages=messages,
+                        current_xml=tool_context.current_xml,
+                        assistant_text=assistant_text,
+                    )
+                ):
+                    diagram_retry_used = True
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": assistant_text or "",
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "You responded with text only, but this request still requires "
+                                "an actual diagram tool call. In your next response, call "
+                                "`display_diagram` to create a new diagram or `edit_diagram` "
+                                "to modify the existing one. Do not stop at explanation alone."
+                            ),
+                        }
+                    )
+                    continue
                 break
 
             # ------------------------------------------------------------------
@@ -626,6 +654,71 @@ class ChatService:
             result.append(msg)
 
         return result
+
+    @staticmethod
+    def _should_retry_for_missing_diagram(
+        messages: list[dict],
+        current_xml: str,
+        assistant_text: str,
+    ) -> bool:
+        if not assistant_text.strip():
+            return False
+
+        latest_user_text = ""
+        has_attachment = False
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        text = str(part.get("text", "")).strip()
+                        if text:
+                            text_parts.append(text)
+                    if part.get("type") in {"image_url", "file"}:
+                        has_attachment = True
+                latest_user_text = "\n".join(text_parts).strip()
+            elif isinstance(content, str):
+                latest_user_text = content.strip()
+            break
+
+        prompt_text = f" {latest_user_text.lower()} "
+        diagram_keywords = (
+            " diagram ",
+            " draw.io ",
+            " flowchart ",
+            " architecture ",
+            " workflow ",
+            " pipeline ",
+            " network ",
+            " system design ",
+            " sequence ",
+            " uml ",
+            " erd ",
+            " chart ",
+            " aws ",
+            " azure ",
+            " gcp ",
+            " kubernetes ",
+            " k8s ",
+        )
+
+        expects_diagram = has_attachment or any(
+            keyword in prompt_text for keyword in diagram_keywords
+        )
+        if not expects_diagram:
+            return False
+
+        # If there is already a meaningful diagram on the canvas, allow
+        # explanatory text-only turns unless the user explicitly asked to draw.
+        if current_xml and "<mxCell" in current_xml and " draw " not in prompt_text:
+            return False
+
+        return True
 
     async def _execute_tool(
         self,

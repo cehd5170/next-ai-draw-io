@@ -349,6 +349,8 @@
         "showUnvalidatedModels": "顯示未驗證的模型",
         "allModelsShown": "顯示所有模型（包括未驗證的）",
         "unvalidatedModelWarning": "此模型尚未驗證",
-        "serverDefaultModel": "伺服器預設模型"
+        "serverDefaultModel": "伺服器預設模型",
+        "selected": "已選取",
+        "useThisModel": "使用"
     }
 }

@@ -52,6 +52,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { useDictionary } from "@/hooks/use-dictionary"
 import type { UseModelConfigReturn } from "@/hooks/use-model-config"
+import { getApiEndpoint } from "@/lib/base-path"
 import { formatMessage } from "@/lib/i18n/utils"
 import type { ProviderConfig, ProviderName } from "@/lib/types/model-config"
 import {
@@ -59,7 +60,6 @@ import {
     PROVIDER_LOGO_MAP,
     SUGGESTED_MODELS,
 } from "@/lib/types/model-config"
-import { getApiEndpoint } from "@/lib/base-path"
 import { cn } from "@/lib/utils"
 
 interface ModelConfigDialogProps {
@@ -176,6 +176,7 @@ export function ModelConfigDialog({
         addModel,
         updateModel,
         deleteModel,
+        setSelectedModelId,
     } = modelConfig
 
     // Get selected provider
@@ -197,7 +198,9 @@ export function ModelConfigDialog({
         }
 
         const stillValid = selectedProviderId
-            ? config.providers.some((provider) => provider.id === selectedProviderId)
+            ? config.providers.some(
+                  (provider) => provider.id === selectedProviderId,
+              )
             : false
         if (stillValid) return
 
@@ -214,7 +217,13 @@ export function ModelConfigDialog({
             : undefined
 
         setSelectedProviderId(matchedProvider?.id ?? config.providers[0].id)
-    }, [config.providers, modelConfig.models, modelConfig.selectedModelId, open, selectedProviderId])
+    }, [
+        config.providers,
+        modelConfig.models,
+        modelConfig.selectedModelId,
+        open,
+        selectedProviderId,
+    ])
 
     // Cleanup validation reset timeout on unmount
     useEffect(() => {
@@ -276,7 +285,8 @@ export function ModelConfigDialog({
             return false
         }
         setDuplicateError("")
-        addModel(selectedProviderId, modelId)
+        const newModel = addModel(selectedProviderId, modelId)
+        setSelectedModelId(newModel.id)
         return true
     }
 
@@ -347,22 +357,26 @@ export function ModelConfigDialog({
                     ? `${window.location.origin}/api/edgeai`
                     : selectedProvider.baseUrl
 
-                const response = await fetch(getApiEndpoint("/api/validate-model"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        provider: selectedProvider.provider,
-                        apiKey: selectedProvider.apiKey,
-                        baseUrl,
-                        modelId: model.modelId,
-                        // AWS Bedrock credentials
-                        awsAccessKeyId: selectedProvider.awsAccessKeyId,
-                        awsSecretAccessKey: selectedProvider.awsSecretAccessKey,
-                        awsRegion: selectedProvider.awsRegion,
-                        // Vertex AI credentials (Express Mode)
-                        vertexApiKey: selectedProvider.vertexApiKey,
-                    }),
-                })
+                const response = await fetch(
+                    getApiEndpoint("/api/validate-model"),
+                    {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            provider: selectedProvider.provider,
+                            apiKey: selectedProvider.apiKey,
+                            baseUrl,
+                            modelId: model.modelId,
+                            // AWS Bedrock credentials
+                            awsAccessKeyId: selectedProvider.awsAccessKeyId,
+                            awsSecretAccessKey:
+                                selectedProvider.awsSecretAccessKey,
+                            awsRegion: selectedProvider.awsRegion,
+                            // Vertex AI credentials (Express Mode)
+                            vertexApiKey: selectedProvider.vertexApiKey,
+                        }),
+                    },
+                )
                 const data = await response.json()
 
                 if (data.valid) {
@@ -1441,6 +1455,9 @@ export function ModelConfigDialog({
                                                                 key={model.id}
                                                                 className={cn(
                                                                     "transition-colors duration-150 hover:bg-interactive-hover/50",
+                                                                    modelConfig.selectedModelId ===
+                                                                        model.id &&
+                                                                        "bg-primary/5",
                                                                 )}
                                                             >
                                                                 <div className="flex items-center gap-3 p-3 min-w-0">
@@ -1634,6 +1651,30 @@ export function ModelConfigDialog({
                                                                         }}
                                                                         className="flex-1 min-w-0 font-mono text-sm h-8 border-0 bg-transparent focus-visible:bg-background focus-visible:ring-1"
                                                                     />
+                                                                    <Button
+                                                                        variant={
+                                                                            modelConfig.selectedModelId ===
+                                                                            model.id
+                                                                                ? "secondary"
+                                                                                : "ghost"
+                                                                        }
+                                                                        size="sm"
+                                                                        className="h-7 shrink-0"
+                                                                        onClick={() =>
+                                                                            setSelectedModelId(
+                                                                                model.id,
+                                                                            )
+                                                                        }
+                                                                    >
+                                                                        {modelConfig.selectedModelId ===
+                                                                        model.id
+                                                                            ? dict
+                                                                                  .modelConfig
+                                                                                  .selected
+                                                                            : dict
+                                                                                  .modelConfig
+                                                                                  .useThisModel}
+                                                                    </Button>
                                                                     <Button
                                                                         variant="ghost"
                                                                         size="icon"

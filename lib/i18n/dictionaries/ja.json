@@ -349,6 +349,8 @@
         "showUnvalidatedModels": "未検証のモデルを表示",
         "allModelsShown": "すべてのモデルを表示（未検証を含む）",
         "unvalidatedModelWarning": "このモデルは検証されていません",
-        "serverDefaultModel": "サーバーデフォルトモデル"
+        "serverDefaultModel": "サーバーデフォルトモデル",
+        "selected": "選択中",
+        "useThisModel": "使用"
     }
 }
