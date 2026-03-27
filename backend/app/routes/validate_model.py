@@ -188,7 +188,7 @@ def _build_litellm_kwargs(
         # If it's a relative path (shouldn't happen from the frontend, but guard),
         # we can't resolve it server-side — skip it and let the default apply.
         if body.baseUrl.startswith("http"):
-            kwargs["base_url"] = body.baseUrl
+            kwargs["api_base"] = body.baseUrl
 
     # AWS Bedrock
     if provider == "bedrock":
@@ -215,8 +215,8 @@ def _build_litellm_kwargs(
         "ollama": settings.OLLAMA_BASE_URL or "http://localhost:11434",
         "gateway": settings.AI_GATEWAY_BASE_URL or "https://ai-gateway.vercel.sh/v1/ai",
     }
-    if "base_url" not in kwargs and provider in _DEFAULT_URLS:
-        kwargs["base_url"] = _DEFAULT_URLS[provider]
+    if "api_base" not in kwargs and provider in _DEFAULT_URLS:
+        kwargs["api_base"] = _DEFAULT_URLS[provider]
 
     return kwargs
 

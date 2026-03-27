@@ -28,6 +28,10 @@ from app.dependencies import get_client_overrides, get_settings, get_user_id
 from app.models.chat import ChatRequest, ClientOverrides
 from app.prompts import build_xml_context, get_system_prompt
 from app.providers.factory import get_ai_model, supports_image_input
+from app.routes.server_models import (
+    find_server_model_by_id,
+    resolve_server_model_credentials,
+)
 from app.services.cached_responses import find_cached_response
 from app.services.chat_service import ChatService, _nanoid, _sse, _SSE_DONE
 from app.services.file_processing import (
@@ -95,6 +99,23 @@ def _build_shape_library_hint(messages: list[dict]) -> str:
     if not user_text.strip():
         return ""
 
+    generic_policy_keywords = (
+        " architecture ",
+        " infrastructure ",
+        " platform ",
+        " system ",
+        " cloud ",
+        " service ",
+        " microservice ",
+        " database ",
+        " queue ",
+        " api ",
+        " browser ",
+        " mobile ",
+        " workflow ",
+        " pipeline ",
+    )
+
     library_patterns = [
         ("aws4", (" aws ", "amazon web services", "aws icon")),
         ("azure2", (" azure ", "azure icon")),
@@ -106,17 +127,27 @@ def _build_shape_library_hint(messages: list[dict]) -> str:
         ("material_design", ("material icon", "material design")),
     ]
 
+    generic_policy = ""
+    if any(pattern in user_text for pattern in generic_policy_keywords):
+        generic_policy = (
+            "## Diagram Style Guidance\n"
+            "This looks like an architecture or system diagram request. "
+            "Prefer layered grouping, semantic shapes, and clear icon/library "
+            "nodes where appropriate. Avoid a wall of generic rounded rectangles.\n\n"
+        )
+
     for library, patterns in library_patterns:
         if any(pattern in user_text for pattern in patterns):
             return (
-                "## Required Shape Library Guidance\n"
+                generic_policy
+                + "## Required Shape Library Guidance\n"
                 f"This request explicitly matches the `{library}` library. "
                 f"Before creating the diagram, call `get_shape_library` with "
                 f'`{{"library":"{library}"}}` and use those documented shapes/icons '
                 "instead of falling back to generic rounded text boxes."
             )
 
-    return ""
+    return generic_policy
 
 
 # ---------------------------------------------------------------------------
@@ -271,11 +302,43 @@ async def chat(
     # 8. Resolve AI model config
     # ------------------------------------------------------------------
     try:
+        resolved_provider = overrides.provider or settings.AI_PROVIDER
+        resolved_model_id = model_id
+        resolved_api_key = overrides.api_key
+        resolved_base_url = overrides.base_url
+
+        if (
+            overrides.selected_model_id
+            and overrides.selected_model_id.startswith("server:")
+        ):
+            server_model = await find_server_model_by_id(
+                overrides.selected_model_id,
+                settings,
+            )
+            if server_model is None:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": (
+                            f"Selected server model '{overrides.selected_model_id}' "
+                            "was not found."
+                        )
+                    },
+                )
+
+            resolved_provider = server_model.provider
+            resolved_model_id = server_model.modelId
+            server_api_key, server_base_url = resolve_server_model_credentials(
+                server_model,
+            )
+            resolved_api_key = resolved_api_key or server_api_key
+            resolved_base_url = resolved_base_url or server_base_url
+
         model_config = get_ai_model(
-            provider=overrides.provider or settings.AI_PROVIDER,
-            model_id=model_id,
-            api_key=overrides.api_key,
-            base_url=overrides.base_url,
+            provider=resolved_provider,
+            model_id=resolved_model_id,
+            api_key=resolved_api_key,
+            base_url=resolved_base_url,
             settings=settings,
         )
     except ValueError as exc:

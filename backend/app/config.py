@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         description="Maximum number of tool-call / agentic steps per request",
     )
     ENABLE_HISTORY_XML_REPLACE: bool = Field(
-        default=False,
+        default=True,
         description="Replace historical tool-call XML with placeholders to save tokens",
     )
 

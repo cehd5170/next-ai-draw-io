@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -24,6 +25,7 @@ from app.models.server_models import ServerModelEntry, ServerModelsResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_rng = random.Random()
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +158,45 @@ def _flatten(cfg: _ServerModelsConfig, settings: Settings) -> list[ServerModelEn
             )
 
     return entries
+
+
+def _pick_env_value(value: str | list[str] | None) -> str | None:
+    """Resolve an env-var name or list of names into a concrete configured value."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        resolved = os.environ.get(value, "").strip()
+        return resolved or None
+
+    candidates = [os.environ.get(name, "").strip() for name in value]
+    candidates = [candidate for candidate in candidates if candidate]
+    if not candidates:
+        return None
+    return _rng.choice(candidates)
+
+
+async def find_server_model_by_id(
+    model_id: str,
+    settings: Settings,
+) -> ServerModelEntry | None:
+    """Return a flattened server model by its synthetic ID."""
+    cfg = await _load_config(settings)
+    if cfg is None:
+        return None
+    return next((entry for entry in _flatten(cfg, settings) if entry.id == model_id), None)
+
+
+def resolve_server_model_credentials(
+    entry: ServerModelEntry,
+) -> tuple[str | None, str | None]:
+    """Resolve API key and base URL values for a flattened server model entry."""
+    api_key = _pick_env_value(entry.apiKeyEnv)
+    base_url = (
+        os.environ.get(entry.baseUrlEnv, "").strip()
+        if entry.baseUrlEnv
+        else None
+    )
+    return api_key or None, base_url or None
 
 
 # ---------------------------------------------------------------------------

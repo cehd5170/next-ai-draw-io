@@ -10,6 +10,25 @@ Sections assembled in order:
 
 from __future__ import annotations
 
+_CURRENT_XML_CONTEXT_CHAR_LIMIT = 24000
+_PREVIOUS_XML_CONTEXT_CHAR_LIMIT = 8000
+
+
+def _truncate_xml_context(xml: str, limit: int) -> str:
+    """Keep XML context informative without letting it dominate the prompt."""
+    trimmed = (xml or "").strip()
+    if len(trimmed) <= limit:
+        return trimmed
+
+    head = trimmed[: limit // 2]
+    tail = trimmed[-(limit // 2) :]
+    omitted = len(trimmed) - len(head) - len(tail)
+    return (
+        f"{head}\n\n"
+        f"... [truncated {omitted} chars to reduce prompt bloat] ...\n\n"
+        f"{tail}"
+    )
+
 # ---------------------------------------------------------------------------
 # Model patterns that require the extended prompt (4 000-token cache minimum)
 # ---------------------------------------------------------------------------
@@ -426,13 +445,17 @@ def build_xml_context(xml: str, previous_xml: str | None = None) -> str:
     parts: list[str] = []
 
     if xml and xml.strip():
-        parts.append(f"## Current diagram XML\n\n```xml\n{xml.strip()}\n```")
+        parts.append(
+            "## Current diagram XML\n\n"
+            f"```xml\n{_truncate_xml_context(xml, _CURRENT_XML_CONTEXT_CHAR_LIMIT)}\n```"
+        )
     else:
         parts.append("## Current diagram XML\n\n(empty — no diagram yet)")
 
     if previous_xml and previous_xml.strip():
         parts.append(
-            f"## Previous diagram XML (before last edit)\n\n```xml\n{previous_xml.strip()}\n```"
+            "## Previous diagram XML (before last edit)\n\n"
+            f"```xml\n{_truncate_xml_context(previous_xml, _PREVIOUS_XML_CONTEXT_CHAR_LIMIT)}\n```"
         )
 
     return "\n\n".join(parts)

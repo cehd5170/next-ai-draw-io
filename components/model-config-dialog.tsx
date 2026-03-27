@@ -183,6 +183,39 @@ export function ModelConfigDialog({
         (p) => p.id === selectedProviderId,
     )
 
+    // Keep the dialog focused on a usable provider when it opens or when the
+    // provider list changes. If the current model belongs to a user provider,
+    // preselect that provider; otherwise fall back to the first one.
+    useEffect(() => {
+        if (!open) return
+
+        if (config.providers.length === 0) {
+            if (selectedProviderId !== null) {
+                setSelectedProviderId(null)
+            }
+            return
+        }
+
+        const stillValid = selectedProviderId
+            ? config.providers.some((provider) => provider.id === selectedProviderId)
+            : false
+        if (stillValid) return
+
+        const currentModelProviderId =
+            modelConfig.selectedModelId &&
+            modelConfig.models.find(
+                (model) => model.id === modelConfig.selectedModelId,
+            )?.provider
+
+        const matchedProvider = currentModelProviderId
+            ? config.providers.find(
+                  (provider) => provider.provider === currentModelProviderId,
+              )
+            : undefined
+
+        setSelectedProviderId(matchedProvider?.id ?? config.providers[0].id)
+    }, [config.providers, modelConfig.models, modelConfig.selectedModelId, open, selectedProviderId])
+
     // Cleanup validation reset timeout on unmount
     useEffect(() => {
         return () => {

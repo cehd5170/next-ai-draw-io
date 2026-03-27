@@ -371,7 +371,7 @@ export function useModelConfig(): UseModelConfigReturn {
  * Get the AI config for the currently selected model.
  * Returns format compatible with existing getAIConfig() usage.
  */
-export function getSelectedAIConfig(): {
+export function getSelectedAIConfig(selectedModel?: FlattenedModel): {
     accessCode: string
     aiProvider: string
     aiBaseUrl: string
@@ -405,6 +405,24 @@ export function getSelectedAIConfig(): {
 
     // Get access code (separate from model config)
     const accessCode = localStorage.getItem(STORAGE_KEYS.accessCode) || ""
+
+    if (selectedModel) {
+        return {
+            accessCode,
+            aiProvider: selectedModel.provider,
+            aiBaseUrl: selectedModel.baseUrl || "",
+            aiApiKey: selectedModel.apiKey || "",
+            aiModel: selectedModel.modelId,
+            // AWS Bedrock credentials
+            awsAccessKeyId: selectedModel.awsAccessKeyId || "",
+            awsSecretAccessKey: selectedModel.awsSecretAccessKey || "",
+            awsRegion: selectedModel.awsRegion || "",
+            awsSessionToken: selectedModel.awsSessionToken || "",
+            selectedModelId: selectedModel.id,
+            // Vertex AI credentials (Express Mode)
+            vertexApiKey: selectedModel.vertexApiKey || "",
+        }
+    }
 
     // Load multi-model config
     const stored = localStorage.getItem(STORAGE_KEYS.modelConfigs)
