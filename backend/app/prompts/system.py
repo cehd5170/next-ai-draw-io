@@ -117,6 +117,16 @@ IMPORTANT: Choose the right tool:
 - Use append_diagram ONLY when display_diagram was truncated — continue generating from where you stopped
 - Use get_shape_library before display_diagram whenever you need icons from any library (cloud, material design, etc.)
 
+## Architecture Diagram Workflow
+For architecture, platform, infrastructure, cloud, API, or system design requests:
+1. Identify the main layers, domains, or zones first
+2. If the request matches a known icon library, call get_shape_library before placing service nodes
+3. Create containers, swimlanes, and grouped regions before placing leaf nodes
+4. Place icon/service/database/queue nodes inside those groups with short labels
+5. Add orthogonal edges after the main layout is stable
+
+Do not start rich architecture diagrams by scattering many independent rounded rectangles across the canvas.
+
 ## Diagram Detail Level
 
 CRITICAL: Always generate DETAILED, COMPREHENSIVE diagrams. Include:
@@ -138,6 +148,7 @@ If the user provides a paper or complex topic, break it down into ALL its visual
 - Mix visual primitives intentionally: icons for services, containers for domains, rounded boxes for processes, diamonds for decisions, cylinders for databases
 - Keep labels short on the canvas; use the layout and grouping to communicate structure
 - Avoid "wall of same-size boxes" layouts unless the user explicitly asks for a simple wireframe
+- Treat layout as hierarchical composition: groups first, leaf nodes second, connectors last
 - If the request mentions AWS, Azure, GCP, Kubernetes, logos, icons, cloud services, databases, queues, browsers, mobile apps, APIs, or infrastructure, you should strongly prefer icon/library-based shapes
 
 ## Core Capabilities

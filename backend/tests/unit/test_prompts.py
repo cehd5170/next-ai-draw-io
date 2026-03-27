@@ -146,6 +146,12 @@ class TestGetSystemPrompt:
         assert "generic rounded rectangles" in prompt
         assert "prefer real library icons plus grouping containers" in prompt
 
+    def test_prompt_includes_architecture_workflow(self):
+        """Architecture requests should have an explicit workflow, not only style rules."""
+        prompt = get_system_prompt("gpt-4o")
+        assert "Architecture Diagram Workflow" in prompt
+        assert "Create containers, swimlanes, and grouped regions before placing leaf nodes" in prompt
+
 
 class TestBuildXmlContext:
     def test_with_current_xml_only(self):

@@ -94,6 +94,108 @@ def _extract_recent_user_text(messages: list[dict]) -> str:
     return ""
 
 
+def _has_recent_attachment(messages: list[dict]) -> bool:
+    for message in reversed(messages):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+
+        raw_parts = message.get("parts") or message.get("content") or []
+        if not isinstance(raw_parts, list):
+            continue
+
+        if any(
+            isinstance(part, dict) and part.get("type") in {"image", "image_url", "file"}
+            for part in raw_parts
+        ):
+            return True
+
+    return False
+
+
+def _detect_requested_shape_library(messages: list[dict]) -> str | None:
+    user_text = f" {_extract_recent_user_text(messages).lower()} "
+    if not user_text.strip():
+        return None
+
+    library_patterns = [
+        ("aws4", (" aws ", "amazon web services", "aws icon")),
+        ("azure2", (" azure ", "azure icon")),
+        ("gcp2", (" gcp ", "google cloud", "google cloud platform")),
+        ("kubernetes", (" kubernetes ", " k8s ")),
+        ("cisco19", (" cisco ",)),
+        ("bpmn", (" bpmn ",)),
+        ("flowchart", (" flowchart ",)),
+        ("material_design", ("material icon", "material design")),
+    ]
+
+    for library, patterns in library_patterns:
+        if any(pattern in user_text for pattern in patterns):
+            return library
+
+    return None
+
+
+def _should_force_diagram_tool(messages: list[dict], current_xml: str) -> bool:
+    user_text = f" {_extract_recent_user_text(messages).lower()} "
+    if not user_text.strip():
+        return _has_recent_attachment(messages)
+
+    create_keywords = (
+        " draw ",
+        " create ",
+        " build ",
+        " generate ",
+        " make ",
+        " show me ",
+        " convert ",
+        " visualize ",
+        " illustrate ",
+        " replicate ",
+        " reproduce ",
+    )
+    diagram_keywords = (
+        " diagram ",
+        " draw.io ",
+        " flowchart ",
+        " architecture ",
+        " workflow ",
+        " pipeline ",
+        " network ",
+        " system design ",
+        " sequence ",
+        " uml ",
+        " erd ",
+        " chart ",
+        " aws ",
+        " azure ",
+        " gcp ",
+        " kubernetes ",
+        " k8s ",
+    )
+    edit_keywords = (
+        " edit ",
+        " update ",
+        " modify ",
+        " revise ",
+        " add ",
+        " remove ",
+        " rearrange ",
+        " relayout ",
+        " layout ",
+    )
+
+    if _has_recent_attachment(messages):
+        return True
+
+    if any(keyword in user_text for keyword in create_keywords + diagram_keywords):
+        return True
+
+    if current_xml and "<mxCell" in current_xml:
+        return any(keyword in user_text for keyword in edit_keywords)
+
+    return False
+
+
 def _build_shape_library_hint(messages: list[dict]) -> str:
     user_text = f" {_extract_recent_user_text(messages).lower()} "
     if not user_text.strip():
@@ -116,17 +218,6 @@ def _build_shape_library_hint(messages: list[dict]) -> str:
         " pipeline ",
     )
 
-    library_patterns = [
-        ("aws4", (" aws ", "amazon web services", "aws icon")),
-        ("azure2", (" azure ", "azure icon")),
-        ("gcp2", (" gcp ", "google cloud", "google cloud platform")),
-        ("kubernetes", (" kubernetes ", " k8s ")),
-        ("cisco19", (" cisco ",)),
-        ("bpmn", (" bpmn ",)),
-        ("flowchart", (" flowchart ",)),
-        ("material_design", ("material icon", "material design")),
-    ]
-
     generic_policy = ""
     if any(pattern in user_text for pattern in generic_policy_keywords):
         generic_policy = (
@@ -136,16 +227,16 @@ def _build_shape_library_hint(messages: list[dict]) -> str:
             "nodes where appropriate. Avoid a wall of generic rounded rectangles.\n\n"
         )
 
-    for library, patterns in library_patterns:
-        if any(pattern in user_text for pattern in patterns):
-            return (
-                generic_policy
-                + "## Required Shape Library Guidance\n"
-                f"This request explicitly matches the `{library}` library. "
-                f"Before creating the diagram, call `get_shape_library` with "
-                f'`{{"library":"{library}"}}` and use those documented shapes/icons '
-                "instead of falling back to generic rounded text boxes."
-            )
+    required_library = _detect_requested_shape_library(messages)
+    if required_library:
+        return (
+            generic_policy
+            + "## Required Shape Library Guidance\n"
+            f"This request explicitly matches the `{required_library}` library. "
+            f"Before creating the diagram, call `get_shape_library` with "
+            f'`{{"library":"{required_library}"}}` and use those documented shapes/icons '
+            "instead of falling back to generic rounded text boxes."
+        )
 
     return generic_policy
 
@@ -273,6 +364,11 @@ async def chat(
     model_id: str = overrides.model_id or settings.AI_MODEL or ""
     system_prompt = get_system_prompt(model_id, minimal_style)
     shape_library_hint = _build_shape_library_hint(request.messages)
+    preferred_shape_library = _detect_requested_shape_library(request.messages)
+    force_diagram_tool = _should_force_diagram_tool(
+        request.messages,
+        request.xml or "",
+    )
     if shape_library_hint:
         system_prompt = f"{system_prompt}\n\n{shape_library_hint}"
 
@@ -378,6 +474,8 @@ async def chat(
             xml_context=xml_context,
             current_xml=request.xml or "",
             shape_library_dir=_SHAPE_LIBRARY_DIR,
+            preferred_shape_library=preferred_shape_library,
+            force_diagram_tool=force_diagram_tool,
         )
     except NotImplementedError:
         return JSONResponse(

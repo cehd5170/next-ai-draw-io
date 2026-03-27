@@ -20,7 +20,14 @@ import {
     X,
     Zap,
 } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+    type ComponentType,
+    type ReactNode,
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+} from "react"
 import {
     AlertDialog,
     AlertDialogAction,
@@ -110,9 +117,9 @@ function ConfigSection({
     children,
 }: {
     title: string
-    icon: React.ComponentType<{ className?: string }>
-    action?: React.ReactNode
-    children: React.ReactNode
+    icon: ComponentType<{ className?: string }>
+    action?: ReactNode
+    children: ReactNode
 }) {
     return (
         <div className="space-y-4">
@@ -131,7 +138,7 @@ function ConfigSection({
 }
 
 // Card wrapper with subtle depth
-function ConfigCard({ children }: { children: React.ReactNode }) {
+function ConfigCard({ children }: { children: ReactNode }) {
     return (
         <div className="rounded-2xl border border-border-subtle bg-surface-2/50 p-5 space-y-5">
             {children}
@@ -204,15 +211,11 @@ export function ModelConfigDialog({
             : false
         if (stillValid) return
 
-        const currentModelProviderId =
-            modelConfig.selectedModelId &&
-            modelConfig.models.find(
-                (model) => model.id === modelConfig.selectedModelId,
-            )?.provider
-
-        const matchedProvider = currentModelProviderId
-            ? config.providers.find(
-                  (provider) => provider.provider === currentModelProviderId,
+        const matchedProvider = modelConfig.selectedModelId
+            ? config.providers.find((provider) =>
+                  provider.models.some(
+                      (model) => model.id === modelConfig.selectedModelId,
+                  ),
               )
             : undefined
 
@@ -224,6 +227,12 @@ export function ModelConfigDialog({
         open,
         selectedProviderId,
     ])
+
+    useEffect(() => {
+        setDuplicateError("")
+        setEditError(null)
+        setValidationError("")
+    }, [selectedProviderId])
 
     // Cleanup validation reset timeout on unmount
     useEffect(() => {
@@ -267,6 +276,7 @@ export function ModelConfigDialog({
             "awsAccessKeyId",
             "awsSecretAccessKey",
             "awsRegion",
+            "awsSessionToken",
             "vertexApiKey",
         ]
         if (credentialFields.includes(field)) {
@@ -279,13 +289,18 @@ export function ModelConfigDialog({
     // Returns true if model was added successfully, false otherwise
     const handleAddModel = (modelId: string): boolean => {
         if (!selectedProviderId || !selectedProvider) return false
+        const trimmedModelId = modelId.trim()
+        if (!trimmedModelId) {
+            setDuplicateError(dict.modelConfig.modelIdEmpty)
+            return false
+        }
         // Prevent duplicate model IDs
-        if (existingModelIds.includes(modelId)) {
-            setDuplicateError(`Model "${modelId}" already exists`)
+        if (existingModelIds.includes(trimmedModelId)) {
+            setDuplicateError(dict.modelConfig.modelIdExists)
             return false
         }
         setDuplicateError("")
-        const newModel = addModel(selectedProviderId, modelId)
+        const newModel = addModel(selectedProviderId, trimmedModelId)
         setSelectedModelId(newModel.id)
         return true
     }
@@ -333,8 +348,9 @@ export function ModelConfigDialog({
 
         // Need at least one model to validate
         if (selectedProvider.models.length === 0) {
-            setValidationError("Add at least one model to validate")
+            setValidationError(dict.modelConfig.addModelBeforeTesting)
             setValidationStatus("error")
+            updateProvider(selectedProviderId, { validated: false })
             return
         }
 
@@ -389,7 +405,8 @@ export function ModelConfigDialog({
                     errorCount++
                     updateModel(selectedProviderId, model.id, {
                         validated: false,
-                        validationError: data.error || "Validation failed",
+                        validationError:
+                            data.error || dict.modelConfig.validationFailed,
                     })
                 }
             } catch {
@@ -397,7 +414,7 @@ export function ModelConfigDialog({
                 errorCount++
                 updateModel(selectedProviderId, model.id, {
                     validated: false,
-                    validationError: "Network error",
+                    validationError: dict.modelConfig.networkError,
                 })
             }
         }
@@ -417,9 +434,23 @@ export function ModelConfigDialog({
             }, 1500)
         } else {
             setValidationStatus("error")
-            setValidationError(`${errorCount} model(s) failed validation`)
+            updateProvider(selectedProviderId, { validated: false })
+            setValidationError(
+                formatMessage(dict.modelConfig.modelsFailedValidation, {
+                    count: errorCount,
+                }),
+            )
         }
-    }, [selectedProvider, selectedProviderId, updateProvider, updateModel])
+    }, [
+        dict.modelConfig.addModelBeforeTesting,
+        dict.modelConfig.modelsFailedValidation,
+        dict.modelConfig.networkError,
+        dict.modelConfig.validationFailed,
+        selectedProvider,
+        selectedProviderId,
+        updateProvider,
+        updateModel,
+    ])
 
     // Get all available provider types
     const availableProviders = Object.keys(PROVIDER_INFO) as ProviderName[]
@@ -1539,6 +1570,12 @@ export function ModelConfigDialog({
                                                                                 )
                                                                             }
                                                                         }}
+                                                                        onFocus={(
+                                                                            e,
+                                                                        ) => {
+                                                                            e.currentTarget.dataset.committedValue =
+                                                                                model.modelId
+                                                                        }}
                                                                         onKeyDown={(
                                                                             e,
                                                                         ) => {
@@ -1554,6 +1591,12 @@ export function ModelConfigDialog({
                                                                         ) => {
                                                                             const newModelId =
                                                                                 e.target.value.trim()
+                                                                            const committedValue =
+                                                                                e
+                                                                                    .currentTarget
+                                                                                    .dataset
+                                                                                    .committedValue ||
+                                                                                model.modelId
 
                                                                             // Helper to show error with shake
                                                                             const showError =
@@ -1567,6 +1610,18 @@ export function ModelConfigDialog({
                                                                                             message,
                                                                                         },
                                                                                     )
+                                                                                    if (
+                                                                                        selectedProviderId
+                                                                                    ) {
+                                                                                        updateModel(
+                                                                                            selectedProviderId,
+                                                                                            model.id,
+                                                                                            {
+                                                                                                modelId:
+                                                                                                    committedValue,
+                                                                                            },
+                                                                                        )
+                                                                                    }
                                                                                     e.target.animate(
                                                                                         [
                                                                                             {
@@ -1648,6 +1703,20 @@ export function ModelConfigDialog({
                                                                             setEditError(
                                                                                 null,
                                                                             )
+                                                                            if (
+                                                                                selectedProviderId &&
+                                                                                newModelId !==
+                                                                                    model.modelId
+                                                                            ) {
+                                                                                updateModel(
+                                                                                    selectedProviderId,
+                                                                                    model.id,
+                                                                                    {
+                                                                                        modelId:
+                                                                                            newModelId,
+                                                                                    },
+                                                                                )
+                                                                            }
                                                                         }}
                                                                         className="flex-1 min-w-0 font-mono text-sm h-8 border-0 bg-transparent focus-visible:bg-background focus-visible:ring-1"
                                                                     />

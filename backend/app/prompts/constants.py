@@ -52,7 +52,9 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "name": "display_diagram",
         "description": (
             "Display a NEW diagram on draw.io. Use this when creating a diagram from scratch "
-            "or when major structural changes are needed."
+            "or when major structural changes are needed. Rich diagrams should include grouping "
+            "containers, semantic shape choices, and the primary flow instead of a flat wall of "
+            "generic text boxes."
         ),
         "parameters": {
             "type": "object",
@@ -62,7 +64,9 @@ TOOL_SCHEMAS: dict[str, dict] = {
                     "description": (
                         "draw.io XML containing ONLY mxCell elements (no wrapper tags). "
                         "IDs must start from '2'. Root cells (id='0', id='1') are added automatically. "
-                        "Prefer containers, icon/library shapes, and varied shape types over generic text-only boxes."
+                        "Build hierarchy first with containers/groups, then service or icon nodes, "
+                        "then connectors. Prefer containers, icon/library shapes, and varied shape "
+                        "types over generic text-only boxes."
                     ),
                 }
             },
@@ -149,7 +153,8 @@ TOOL_SCHEMAS: dict[str, dict] = {
             "Get shape/icon library documentation. Use this to discover available icon shapes "
             "(AWS, Azure, GCP, Kubernetes, Material Design, etc.) before creating diagrams with "
             "special icons. ALWAYS call this before using any icon library — never guess the syntax. "
-            "This is especially important for requests that mention AWS, Azure, GCP, Kubernetes, or icons."
+            "This is especially important for requests that mention AWS, Azure, GCP, Kubernetes, "
+            "architecture, cloud infrastructure, or icons."
         ),
         "parameters": {
             "type": "object",

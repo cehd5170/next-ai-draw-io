@@ -221,6 +221,29 @@ export function useModelConfig(): UseModelConfigReturn {
         ? models.find((m) => m.id === config.selectedModelId)
         : undefined
 
+    useEffect(() => {
+        if (!isLoaded || !serverLoaded) return
+        if (models.length === 0) return
+        if (selectedModel) return
+
+        const fallbackModelId =
+            models.find((model) => model.isDefault)?.id || models[0]?.id
+        if (!fallbackModelId) return
+
+        setConfig((prev) => {
+            if (
+                prev.selectedModelId &&
+                models.some((m) => m.id === prev.selectedModelId)
+            ) {
+                return prev
+            }
+            return {
+                ...prev,
+                selectedModelId: fallbackModelId,
+            }
+        })
+    }, [isLoaded, serverLoaded, models, selectedModel])
+
     // Actions
     const setSelectedModelId = useCallback((modelId: string | undefined) => {
         setConfig((prev) => ({

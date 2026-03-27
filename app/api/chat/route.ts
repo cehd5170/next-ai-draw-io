@@ -17,6 +17,7 @@ const HOP_BY_HOP_HEADERS = [
 const STREAMING_RESPONSE_HEADERS = {
     "Cache-Control": "no-cache, no-store, no-transform",
     "X-Accel-Buffering": "no",
+    Connection: "keep-alive",
 }
 
 function getPythonApiUrl(): string | null {
@@ -57,17 +58,19 @@ export async function proxyChatRequest(request: Request): Promise<Response> {
     if (!upstreamUrl) {
         return Response.json(
             {
-                error:
-                    "PYTHON_API_URL environment variable is required for /api/chat.",
+                error: "PYTHON_API_URL environment variable is required for /api/chat.",
             },
             { status: 500 },
         )
     }
 
+    const requestId = request.headers.get("x-request-id") ?? crypto.randomUUID()
     const body = request.body
+    const headers = buildForwardHeaders(request.headers)
+    headers.set("x-request-id", requestId)
     const init: RequestInit & { duplex?: "half" } = {
         method: request.method,
-        headers: buildForwardHeaders(request.headers),
+        headers,
         body: body ?? undefined,
         signal: request.signal,
         cache: "no-store",
@@ -76,12 +79,27 @@ export async function proxyChatRequest(request: Request): Promise<Response> {
         init.duplex = "half"
     }
 
-    const upstreamResponse = await fetch(upstreamUrl, init)
-    return new Response(upstreamResponse.body, {
-        status: upstreamResponse.status,
-        statusText: upstreamResponse.statusText,
-        headers: buildProxyResponseHeaders(upstreamResponse.headers),
-    })
+    try {
+        const upstreamResponse = await fetch(upstreamUrl, init)
+        const responseHeaders = buildProxyResponseHeaders(
+            upstreamResponse.headers,
+        )
+        responseHeaders.set("x-request-id", requestId)
+
+        return new Response(upstreamResponse.body, {
+            status: upstreamResponse.status,
+            statusText: upstreamResponse.statusText,
+            headers: responseHeaders,
+        })
+    } catch {
+        return Response.json(
+            {
+                error: "Upstream chat request failed before the stream started.",
+                requestId,
+            },
+            { status: 502 },
+        )
+    }
 }
 
 export async function POST(request: Request): Promise<Response> {

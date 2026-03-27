@@ -102,7 +102,7 @@ _SSE_DONE = "data: [DONE]\n\n"
 _SSE_HEARTBEAT = ": heartbeat\n\n"
 
 # Send a heartbeat if no data has been yielded for this many seconds.
-_HEARTBEAT_INTERVAL_SECONDS = 15
+_HEARTBEAT_INTERVAL_SECONDS = 8
 
 
 def _tool_input_events(
@@ -258,6 +258,8 @@ class ChatService:
         xml_context: str,
         current_xml: str = "",
         shape_library_dir: str = _SHAPE_LIBRARY_DIR,
+        preferred_shape_library: str | None = None,
+        force_diagram_tool: bool = False,
     ) -> AsyncGenerator[str, None]:
         """
         Yield UIMessageStream-formatted SSE events for a single chat turn.
@@ -312,6 +314,8 @@ class ChatService:
         # Emit the stream-start event.
         yield _sse({"type": "start", "messageId": message_id})
         diagram_retry_used = False
+        shape_library_consulted = preferred_shape_library is None
+        diagram_tool_emitted = False
 
         for step in range(self.settings.MAX_TOOL_STEPS):
             # ------------------------------------------------------------------
@@ -322,7 +326,13 @@ class ChatService:
                 "messages": messages,
                 "stream": True,
                 "tools": tool_defs,
-                "tool_choice": "auto",
+                "tool_choice": self._select_tool_choice(
+                    step=step,
+                    force_diagram_tool=force_diagram_tool,
+                    preferred_shape_library=preferred_shape_library,
+                    shape_library_consulted=shape_library_consulted,
+                    diagram_tool_emitted=diagram_tool_emitted,
+                ),
                 "max_tokens": self.settings.MAX_OUTPUT_TOKENS,
             }
 
@@ -553,6 +563,7 @@ class ChatService:
                 args_json = json.dumps(parsed_args, ensure_ascii=False)
 
                 if tool_name in CLIENT_SIDE_TOOLS:
+                    diagram_tool_emitted = True
                     # Client-side tool — just emit SSE events for the
                     # frontend; no server-side execution.
                     for event in _tool_input_events(tool_call_id, tool_name, args_json, parsed_args):
@@ -569,6 +580,8 @@ class ChatService:
                         arguments=parsed_args,
                         context=tool_context,
                     )
+                    if tool_name == "get_shape_library" and result.success:
+                        shape_library_consulted = True
 
                     needs_another_round = True
                     if result.success:
@@ -661,9 +674,16 @@ class ChatService:
         current_xml: str,
         assistant_text: str,
     ) -> bool:
-        if not assistant_text.strip():
-            return False
+        return bool(assistant_text.strip()) and ChatService._expects_diagram_tool(
+            messages=messages,
+            current_xml=current_xml,
+        )
 
+    @staticmethod
+    def _expects_diagram_tool(
+        messages: list[dict],
+        current_xml: str,
+    ) -> bool:
         latest_user_text = ""
         has_attachment = False
         for msg in reversed(messages):
@@ -687,6 +707,19 @@ class ChatService:
             break
 
         prompt_text = f" {latest_user_text.lower()} "
+        create_keywords = (
+            " draw ",
+            " create ",
+            " build ",
+            " generate ",
+            " make ",
+            " show me ",
+            " convert ",
+            " visualize ",
+            " illustrate ",
+            " replicate ",
+            " reproduce ",
+        )
         diagram_keywords = (
             " diagram ",
             " draw.io ",
@@ -706,19 +739,53 @@ class ChatService:
             " kubernetes ",
             " k8s ",
         )
+        edit_keywords = (
+            " edit ",
+            " update ",
+            " modify ",
+            " revise ",
+            " add ",
+            " remove ",
+            " rearrange ",
+            " relayout ",
+            " layout ",
+        )
 
         expects_diagram = has_attachment or any(
-            keyword in prompt_text for keyword in diagram_keywords
+            keyword in prompt_text for keyword in create_keywords + diagram_keywords
         )
         if not expects_diagram:
+            if current_xml and "<mxCell" in current_xml:
+                return any(keyword in prompt_text for keyword in edit_keywords)
             return False
 
         # If there is already a meaningful diagram on the canvas, allow
         # explanatory text-only turns unless the user explicitly asked to draw.
-        if current_xml and "<mxCell" in current_xml and " draw " not in prompt_text:
+        if (
+            current_xml
+            and "<mxCell" in current_xml
+            and not any(keyword in prompt_text for keyword in create_keywords + edit_keywords)
+        ):
             return False
 
         return True
+
+    @staticmethod
+    def _select_tool_choice(
+        *,
+        step: int,
+        force_diagram_tool: bool,
+        preferred_shape_library: str | None,
+        shape_library_consulted: bool,
+        diagram_tool_emitted: bool,
+    ) -> Any:
+        if preferred_shape_library and not shape_library_consulted:
+            return {"type": "function", "function": {"name": "get_shape_library"}}
+
+        if force_diagram_tool and not diagram_tool_emitted:
+            return "required"
+
+        return "auto"
 
     async def _execute_tool(
         self,
