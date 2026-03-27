@@ -25,7 +25,7 @@ import {
     ModelSelectorSeparator,
     ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector"
-import { ButtonWithTooltip } from "@/components/button-with-tooltip"
+import { Button } from "@/components/ui/button"
 import { useDictionary } from "@/hooks/use-dictionary"
 import {
     type FlattenedModel,
@@ -76,13 +76,16 @@ export function ModelSelector({
 }: ModelSelectorProps) {
     const dict = useDictionary()
     const [open, setOpen] = useState(false)
-    // Filter models based on showUnvalidatedModels setting
+    // Keep the currently selected model visible even when it is unvalidated,
+    // so users can recover from failed validation without losing the selection.
     const displayModels = useMemo(() => {
         if (showUnvalidatedModels) {
             return models
         }
-        return models.filter((m) => m.validated === true)
-    }, [models, showUnvalidatedModels])
+        return models.filter(
+            (model) => model.validated === true || model.id === selectedModelId,
+        )
+    }, [models, selectedModelId, showUnvalidatedModels])
 
     // Separate server and user models
     const serverModels = useMemo(
@@ -161,20 +164,19 @@ export function ModelSelector({
         <div ref={wrapperRef} className="inline-block">
             <ModelSelectorRoot open={open} onOpenChange={setOpen}>
                 <ModelSelectorTrigger asChild>
-                    <ButtonWithTooltip
-                        tooltipContent={tooltipContent}
+                    <Button
                         variant="ghost"
                         size="sm"
+                        type="button"
                         disabled={disabled}
                         className={cn(
                             "hover:bg-accent gap-1.5 h-8 px-2 transition-[padding,background-color] duration-150 ease-in-out",
                             !showLabel && "px-1.5 justify-center",
                         )}
-                        // accessibility: expose label to screen readers
                         aria-label={tooltipContent}
+                        title={tooltipContent}
                     >
                         <Bot className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                        {/* show/hide visible label based on measured width */}
                         {showLabel ? (
                             <span className="text-xs truncate">
                                 {selectedModel
@@ -190,7 +192,7 @@ export function ModelSelector({
                             </span>
                         )}
                         <ChevronDown className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                    </ButtonWithTooltip>
+                    </Button>
                 </ModelSelectorTrigger>
 
                 <ModelSelectorContent title={dict.modelConfig.selectModel}>
