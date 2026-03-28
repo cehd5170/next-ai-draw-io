@@ -20,6 +20,7 @@ import time
 import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from openai import AsyncOpenAI
 
 from app.config import Settings
 from app.dependencies import get_settings
@@ -37,6 +38,9 @@ _AWS_PROVIDERS = {"bedrock"}
 
 # Providers that require Vertex AI credentials
 _VERTEX_PROVIDERS = {"vertexai"}
+
+# Providers we validate through the official OpenAI SDK path.
+_OPENAI_SDK_PROVIDERS = {"openai", "openrouter"}
 
 
 @router.post("/validate-model", response_model=ValidateModelResponse)
@@ -130,27 +134,34 @@ async def _test_completion(
     model_id: str,
     settings: Settings,
 ) -> JSONResponse:
-    """Make a minimal litellm completion and return a validated response."""
-    try:
-        import litellm  # type: ignore[import]
-    except ImportError:
-        return JSONResponse(
-            content=ValidateModelResponse(
-                valid=False,
-                error="litellm is not installed on the server",
-            ).model_dump()
-        )
-
-    # Build litellm call kwargs
-    call_kwargs = _build_litellm_kwargs(body, provider, model_id, settings)
-
+    """Make a minimal completion and return a validated response."""
     start = time.monotonic()
+
     try:
-        await litellm.acompletion(  # type: ignore[attr-defined]
-            messages=[{"role": "user", "content": "Say 'OK'"}],
-            max_tokens=20,
-            **call_kwargs,
-        )
+        if provider in _OPENAI_SDK_PROVIDERS:
+            client = AsyncOpenAI(
+                **_build_openai_client_kwargs(body, provider, settings)
+            )
+            await client.chat.completions.create(
+                **_build_openai_sdk_request(model_id)
+            )
+        else:
+            try:
+                import litellm  # type: ignore[import]
+            except ImportError:
+                return JSONResponse(
+                    content=ValidateModelResponse(
+                        valid=False,
+                        error="litellm is not installed on the server",
+                    ).model_dump()
+                )
+
+            await litellm.acompletion(  # type: ignore[attr-defined]
+                messages=[{"role": "user", "content": "Say 'OK'"}],
+                max_tokens=20,
+                **_build_litellm_kwargs(body, provider, model_id, settings),
+            )
+
         response_time_ms = int((time.monotonic() - start) * 1000)
         return JSONResponse(
             content=ValidateModelResponse(
@@ -164,6 +175,33 @@ async def _test_completion(
         return JSONResponse(
             content=ValidateModelResponse(valid=False, error=error_msg).model_dump()
         )
+
+
+def _build_openai_client_kwargs(
+    body: ValidateModelRequest,
+    provider: str,
+    settings: Settings,
+) -> dict:
+    """Assemble ``AsyncOpenAI(...)`` keyword arguments."""
+    kwargs: dict = {}
+    if body.apiKey:
+        kwargs["api_key"] = body.apiKey
+
+    resolved_base_url = _resolve_provider_base_url(body, provider, settings)
+    if resolved_base_url:
+        kwargs["base_url"] = resolved_base_url
+
+    return kwargs
+
+
+def _build_openai_sdk_request(model_id: str) -> dict:
+    """Assemble ``client.chat.completions.create(...)`` keyword arguments."""
+    request = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "Say 'OK'"}],
+    }
+    request.update(_openai_token_limit_kwargs(model_id, 20))
+    return request
 
 
 def _build_litellm_kwargs(
@@ -183,13 +221,6 @@ def _build_litellm_kwargs(
     if body.apiKey:
         kwargs["api_key"] = body.apiKey
 
-    if body.baseUrl:
-        # EdgeOne sends a URL pointing to the Next.js /api/edgeai edge function.
-        # If it's a relative path (shouldn't happen from the frontend, but guard),
-        # we can't resolve it server-side — skip it and let the default apply.
-        if body.baseUrl.startswith("http"):
-            kwargs["api_base"] = body.baseUrl
-
     # AWS Bedrock
     if provider == "bedrock":
         kwargs["aws_access_key_id"] = body.awsAccessKeyId
@@ -200,8 +231,27 @@ def _build_litellm_kwargs(
     elif provider == "vertexai" and body.vertexApiKey:
         kwargs["vertex_ai_api_key"] = body.vertexApiKey
 
-    # Provider-specific default base URLs for OpenAI-compatible providers
-    _DEFAULT_URLS: dict[str, str] = {
+    resolved_base_url = _resolve_provider_base_url(body, provider, settings)
+    if resolved_base_url:
+        kwargs["api_base"] = resolved_base_url
+
+    return kwargs
+
+
+def _resolve_provider_base_url(
+    body: ValidateModelRequest,
+    provider: str,
+    settings: Settings,
+) -> str | None:
+    """Resolve the effective provider base URL for validate-model requests."""
+    if body.baseUrl:
+        # EdgeOne sends a relative /api/edgeai URL from the browser. The Python
+        # backend cannot resolve that server-side, so only absolute URLs apply here.
+        if body.baseUrl.startswith("http"):
+            return body.baseUrl
+        return None
+
+    default_urls: dict[str, str] = {
         "siliconflow": "https://api.siliconflow.cn/v1",
         "sglang": "http://127.0.0.1:8000/v1",
         "doubao": "https://ark.cn-beijing.volces.com/api/v3",
@@ -215,10 +265,15 @@ def _build_litellm_kwargs(
         "ollama": settings.OLLAMA_BASE_URL or "http://localhost:11434",
         "gateway": settings.AI_GATEWAY_BASE_URL or "https://ai-gateway.vercel.sh/v1/ai",
     }
-    if "api_base" not in kwargs and provider in _DEFAULT_URLS:
-        kwargs["api_base"] = _DEFAULT_URLS[provider]
+    return default_urls.get(provider)
 
-    return kwargs
+
+def _openai_token_limit_kwargs(model_id: str, limit: int) -> dict[str, int]:
+    """Use the correct OpenAI Chat Completions token-limit parameter per model."""
+    lower = (model_id or "").lower()
+    if any(token in lower for token in ("gpt-5", "o1", "o3", "o4")):
+        return {"max_completion_tokens": limit}
+    return {"max_tokens": limit}
 
 
 def _classify_error(exc: Exception) -> str:

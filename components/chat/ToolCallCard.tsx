@@ -66,7 +66,7 @@ export function ToolCallCard({
     dict,
 }: ToolCallCardProps) {
     const callId = part.toolCallId
-    const { state, input, output } = part
+    const { state, input, output, errorText } = part
     // Default to expanded for all states (user can manually collapse if needed)
     const isExpanded = expandedTools[callId] ?? true
     const toolName = part.type?.replace("tool-", "")
@@ -209,20 +209,21 @@ export function ToolCallCard({
                     ) : null}
                 </div>
             )}
-            {output &&
+            {(errorText || output) &&
                 state === "output-error" &&
                 (() => {
                     const isTruncated =
                         (toolName === "display_diagram" ||
                             toolName === "append_diagram") &&
                         !isMxCellXmlComplete(input?.xml)
+                    const message = errorText || output || ""
                     return (
                         <div
                             className={`px-4 py-3 border-t border-border/40 text-sm ${isTruncated ? "text-yellow-600" : "text-red-600"}`}
                         >
                             {isTruncated
                                 ? "Output truncated due to length limits. Try a simpler request or increase the maxOutputLength."
-                                : output}
+                                : message}
                         </div>
                     )
                 })()}

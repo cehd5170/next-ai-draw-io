@@ -45,7 +45,10 @@ import random
 import string
 from typing import Any, AsyncGenerator
 
+from openai import AsyncOpenAI
+
 from app.config import Settings
+from app.middleware.request_context import get_request_id
 from app.models.chat import ChatRequest
 from app.providers.base import ModelConfig
 from app.services.json_repair import get_fallback_tool_input, repair_tool_call_json
@@ -104,19 +107,26 @@ _SSE_HEARTBEAT = ": heartbeat\n\n"
 # Send a heartbeat if no data has been yielded for this many seconds.
 _HEARTBEAT_INTERVAL_SECONDS = 8
 
+# Coalesce provider tool-call argument fragments before forwarding them to the
+# browser. Sending every tiny XML token causes AI SDK partial-JSON reparsing on
+# each event, which can starve normal text/reasoning rendering on large diagrams.
+_TOOL_INPUT_DELTA_FLUSH_CHARS = 768
 
-def _tool_input_events(
+
+def _tool_input_available_event(
     tool_call_id: str,
     tool_name: str,
-    args_json: str,
     parsed_args: dict,
-) -> list[str]:
-    """Return the three SSE events that announce a tool-call's input to the client."""
-    return [
-        _sse({"type": "tool-input-start", "toolCallId": tool_call_id, "toolName": tool_name}),
-        _sse({"type": "tool-input-delta", "toolCallId": tool_call_id, "inputTextDelta": args_json}),
-        _sse({"type": "tool-input-available", "toolCallId": tool_call_id, "toolName": tool_name, "input": parsed_args}),
-    ]
+) -> str:
+    """Return the finalized tool-input event once the full JSON is available."""
+    return _sse(
+        {
+            "type": "tool-input-available",
+            "toolCallId": tool_call_id,
+            "toolName": tool_name,
+            "input": parsed_args,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +287,6 @@ class ChatService:
         current_xml:
             Current diagram XML for tool context.
         """
-        import litellm  # noqa: PLC0415 (deferred to avoid startup cost)
         single_system = getattr(model_config, "single_system", False)
 
         messages = self._build_messages(
@@ -319,37 +328,9 @@ class ChatService:
 
         for step in range(self.settings.MAX_TOOL_STEPS):
             # ------------------------------------------------------------------
-            # Build litellm call kwargs
-            # ------------------------------------------------------------------
-            call_kwargs: dict[str, Any] = {
-                "model": model_config.model_id,
-                "messages": messages,
-                "stream": True,
-                "tools": tool_defs,
-                "tool_choice": self._select_tool_choice(
-                    step=step,
-                    force_diagram_tool=force_diagram_tool,
-                    preferred_shape_library=preferred_shape_library,
-                    shape_library_consulted=shape_library_consulted,
-                    diagram_tool_emitted=diagram_tool_emitted,
-                ),
-                "max_tokens": self.settings.MAX_OUTPUT_TOKENS,
-            }
-
-            if model_config.api_key:
-                call_kwargs["api_key"] = model_config.api_key
-            if model_config.base_url:
-                call_kwargs["api_base"] = model_config.base_url
-            if self.settings.TEMPERATURE is not None:
-                call_kwargs["temperature"] = self.settings.TEMPERATURE
-
-            # Merge provider-specific extra params (thinking budget, etc.).
-            call_kwargs.update(model_config.extra_params)
-
-            # ------------------------------------------------------------------
             # Stream response and collect tool-call fragments
             # ------------------------------------------------------------------
-            tool_calls_acc: dict[int, dict] = {}  # index → accumulated call
+            tool_calls_acc: dict[int, dict[str, Any]] = {}  # index → accumulated call
             finish_reason: str | None = None
             assistant_text = ""
 
@@ -358,11 +339,29 @@ class ChatService:
             text_block_open = False
             reasoning_id: str | None = None
             reasoning_block_open = False
+            step_stats = {
+                "text_chars": 0,
+                "reasoning_chars": 0,
+                "tool_calls_started": 0,
+                "tool_delta_events": 0,
+                "tool_delta_chars": 0,
+            }
 
             try:
                 response_stream = None
                 async for event_type, payload in self._await_with_sse_heartbeats(
-                    litellm.acompletion(**call_kwargs),  # type: ignore[attr-defined]
+                    self._create_provider_stream(
+                        model_config=model_config,
+                        messages=messages,
+                        tools=tool_defs,
+                        tool_choice=self._select_tool_choice(
+                            step=step,
+                            force_diagram_tool=force_diagram_tool,
+                            preferred_shape_library=preferred_shape_library,
+                            shape_library_consulted=shape_library_consulted,
+                            diagram_tool_emitted=diagram_tool_emitted,
+                        ),
+                    ),
                 ):
                     if event_type == "heartbeat":
                         yield _SSE_HEARTBEAT
@@ -370,7 +369,7 @@ class ChatService:
                     response_stream = payload
                     break
             except Exception as exc:
-                logger.error("litellm.acompletion failed: %s", exc, exc_info=True)
+                logger.error("Provider stream initialization failed: %s", exc, exc_info=True)
                 for event in self._error_events(exc):
                     yield event
                 return
@@ -418,6 +417,7 @@ class ChatService:
                                 "delta": reasoning_content,
                             }
                         )
+                        step_stats["reasoning_chars"] += len(reasoning_content)
 
                     # ── Text delta ───────────────────────────────────────────
                     if delta.content:
@@ -430,6 +430,7 @@ class ChatService:
                         yield _sse(
                             {"type": "text-delta", "id": text_id, "delta": delta.content}
                         )
+                        step_stats["text_chars"] += len(delta.content)
 
                     # ── Tool-call deltas ─────────────────────────────────────
                     if delta.tool_calls:
@@ -437,17 +438,64 @@ class ChatService:
                             idx = tc.index if hasattr(tc, "index") else 0
                             if idx not in tool_calls_acc:
                                 tool_calls_acc[idx] = {
-                                    "id": "",
+                                    "id": tc.id or _nanoid("call_"),
                                     "name": "",
                                     "arguments_raw": "",
+                                    "input_started": False,
+                                    "has_emitted_delta": False,
+                                    "pending_arguments_delta": "",
                                 }
                             acc = tool_calls_acc[idx]
-                            if tc.id:
+                            if tc.id and not acc["id"]:
                                 acc["id"] = tc.id
                             if tc.function and tc.function.name:
                                 acc["name"] = tc.function.name
+                            arguments_delta = ""
                             if tc.function and tc.function.arguments:
-                                acc["arguments_raw"] += tc.function.arguments
+                                arguments_delta = tc.function.arguments
+                                acc["arguments_raw"] += arguments_delta
+                                acc["pending_arguments_delta"] += arguments_delta
+
+                            if (
+                                acc["name"] in CLIENT_SIDE_TOOLS
+                                and not acc["input_started"]
+                            ):
+                                yield _sse(
+                                    {
+                                        "type": "tool-input-start",
+                                        "toolCallId": acc["id"],
+                                        "toolName": acc["name"],
+                                    }
+                                )
+                                acc["input_started"] = True
+                                step_stats["tool_calls_started"] += 1
+
+                            should_flush_delta = (
+                                acc["name"] in CLIENT_SIDE_TOOLS
+                                and acc["input_started"]
+                                and acc["pending_arguments_delta"]
+                                and (
+                                    not acc["has_emitted_delta"]
+                                    or len(acc["pending_arguments_delta"])
+                                    >= _TOOL_INPUT_DELTA_FLUSH_CHARS
+                                )
+                            )
+                            if should_flush_delta:
+                                yield _sse(
+                                    {
+                                        "type": "tool-input-delta",
+                                        "toolCallId": acc["id"],
+                                        "inputTextDelta": acc[
+                                            "pending_arguments_delta"
+                                        ],
+                                    }
+                                )
+                                step_stats["tool_delta_events"] += 1
+                                step_stats["tool_delta_chars"] += len(
+                                    acc["pending_arguments_delta"]
+                                )
+                                acc["pending_arguments_delta"] = ""
+                                acc["has_emitted_delta"] = True
             except Exception as exc:
                 logger.error("Stream processing failed: %s", exc, exc_info=True)
                 if reasoning_block_open and reasoning_id:
@@ -560,20 +608,41 @@ class ChatService:
                 tool_name = acc["name"]
                 tool_call_id = acc["id"]
                 parsed_args = parsed_per_idx[idx]
-                args_json = json.dumps(parsed_args, ensure_ascii=False)
+
+                if (
+                    tool_name in CLIENT_SIDE_TOOLS
+                    and acc["input_started"]
+                    and acc["pending_arguments_delta"]
+                ):
+                    yield _sse(
+                        {
+                            "type": "tool-input-delta",
+                            "toolCallId": tool_call_id,
+                            "inputTextDelta": acc["pending_arguments_delta"],
+                        }
+                    )
+                    step_stats["tool_delta_events"] += 1
+                    step_stats["tool_delta_chars"] += len(
+                        acc["pending_arguments_delta"]
+                    )
+                    acc["pending_arguments_delta"] = ""
+                    acc["has_emitted_delta"] = True
 
                 if tool_name in CLIENT_SIDE_TOOLS:
                     diagram_tool_emitted = True
-                    # Client-side tool — just emit SSE events for the
-                    # frontend; no server-side execution.
-                    for event in _tool_input_events(tool_call_id, tool_name, args_json, parsed_args):
-                        yield event
+                    yield _tool_input_available_event(
+                        tool_call_id,
+                        tool_name,
+                        parsed_args,
+                    )
 
                 else:
-                    # Server-side tool — emit input events, execute,
-                    # then emit output.
-                    for event in _tool_input_events(tool_call_id, tool_name, args_json, parsed_args):
-                        yield event
+                    # Server-side tool — emit finalized input, execute, then emit output.
+                    yield _tool_input_available_event(
+                        tool_call_id,
+                        tool_name,
+                        parsed_args,
+                    )
 
                     result = await self._execute_tool(
                         name=tool_name,
@@ -610,6 +679,19 @@ class ChatService:
                         }
                     )
 
+            logger.info(
+                "[chat stream] request_id=%s step=%s finish_reason=%s text_chars=%s reasoning_chars=%s tool_calls_started=%s tool_delta_events=%s tool_delta_chars=%s tool_calls_total=%s",
+                get_request_id(),
+                step,
+                finish_reason,
+                step_stats["text_chars"],
+                step_stats["reasoning_chars"],
+                step_stats["tool_calls_started"],
+                step_stats["tool_delta_events"],
+                step_stats["tool_delta_chars"],
+                len(tool_calls_acc),
+            )
+
             # If nothing requires another LLM round, we are done.
             if not needs_another_round:
                 break
@@ -623,6 +705,89 @@ class ChatService:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _create_provider_stream(
+        self,
+        *,
+        model_config: ModelConfig,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str | dict[str, Any],
+    ) -> Any:
+        """Create the provider streaming request for the current step."""
+        if model_config.provider == "openai":
+            client_kwargs: dict[str, Any] = {}
+            if model_config.api_key:
+                client_kwargs["api_key"] = model_config.api_key
+            if model_config.base_url:
+                client_kwargs["base_url"] = model_config.base_url
+            if self.settings.OPENAI_ORGANIZATION:
+                client_kwargs["organization"] = self.settings.OPENAI_ORGANIZATION
+            if self.settings.OPENAI_PROJECT:
+                client_kwargs["project"] = self.settings.OPENAI_PROJECT
+
+            client = AsyncOpenAI(**client_kwargs)
+            call_kwargs: dict[str, Any] = {
+                "model": self._provider_model_id(model_config.model_id),
+                "messages": messages,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "tools": tools,
+                "tool_choice": tool_choice,
+            }
+            call_kwargs.update(
+                self._openai_token_limit_kwargs(
+                    call_kwargs["model"],
+                    self.settings.MAX_OUTPUT_TOKENS,
+                )
+            )
+
+            if self.settings.TEMPERATURE is not None:
+                call_kwargs["temperature"] = self.settings.TEMPERATURE
+            reasoning_effort = model_config.extra_params.get("reasoning_effort")
+            if reasoning_effort and not tools:
+                call_kwargs["reasoning_effort"] = reasoning_effort
+
+            return client.chat.completions.create(**call_kwargs)
+
+        import litellm  # noqa: PLC0415
+
+        call_kwargs = {
+            "model": model_config.model_id,
+            "messages": messages,
+            "stream": True,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "max_tokens": self.settings.MAX_OUTPUT_TOKENS,
+        }
+        if model_config.api_key:
+            call_kwargs["api_key"] = model_config.api_key
+        if model_config.base_url:
+            call_kwargs["api_base"] = model_config.base_url
+        if self.settings.TEMPERATURE is not None:
+            call_kwargs["temperature"] = self.settings.TEMPERATURE
+        call_kwargs.update(model_config.extra_params)
+
+        return litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _provider_model_id(model_id: str) -> str:
+        """Strip the litellm provider prefix when calling the official SDK."""
+        return model_id.split("/", 1)[1] if "/" in model_id else model_id
+
+    @staticmethod
+    def _openai_token_limit_kwargs(
+        model_id: str,
+        max_output_tokens: int,
+    ) -> dict[str, int]:
+        """
+        OpenAI reasoning / GPT-5 family models require ``max_completion_tokens``
+        instead of ``max_tokens`` on the Chat Completions API.
+        """
+        lower = (model_id or "").lower()
+        if any(token in lower for token in ("gpt-5", "o1", "o3", "o4")):
+            return {"max_completion_tokens": max_output_tokens}
+        return {"max_tokens": max_output_tokens}
 
     def _build_messages(
         self,

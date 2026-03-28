@@ -17,6 +17,7 @@ const HOP_BY_HOP_HEADERS = [
 const STREAMING_RESPONSE_HEADERS = {
     "Cache-Control": "no-cache, no-store, no-transform",
     "X-Accel-Buffering": "no",
+    "x-vercel-ai-ui-message-stream": "v1",
     Connection: "keep-alive",
 }
 

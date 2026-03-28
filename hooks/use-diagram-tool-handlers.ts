@@ -6,7 +6,7 @@ import type {
 } from "@/components/chat/ValidationCard"
 import type { ValidationResult } from "@/lib/diagram-validator"
 import { formatValidationFeedback } from "@/lib/diagram-validator"
-import { isMxCellXmlComplete, wrapWithMxFile } from "@/lib/utils"
+import { isMxCellXmlComplete, prepareDiagramXmlForDisplay } from "@/lib/utils"
 
 const DEBUG = process.env.NODE_ENV === "development"
 
@@ -83,7 +83,7 @@ export function useDiagramToolHandlers({
     sessionId,
     onValidationStateChange,
 }: UseDiagramToolHandlersParams) {
-    const withTimeout = async <T,>(
+    const withTimeout = async <T>(
         promise: Promise<T>,
         timeoutMs: number,
         label: string,
@@ -94,7 +94,11 @@ export function useDiagramToolHandlers({
                 promise,
                 new Promise<T>((_, reject) => {
                     timeoutId = setTimeout(() => {
-                        reject(new Error(`${label} timed out after ${timeoutMs}ms`))
+                        reject(
+                            new Error(
+                                `${label} timed out after ${timeoutMs}ms`,
+                            ),
+                        )
                     }, timeoutMs)
                 }),
             ])
@@ -194,14 +198,10 @@ NEXT STEP: Call append_diagram with the continuation XML.
         const finalXml = xml
         partialXmlRef.current = "" // Reset any partial from previous truncation
 
-        // Wrap raw XML with full mxfile structure for draw.io
-        const fullXml = wrapWithMxFile(finalXml)
+        const prepared = prepareDiagramXmlForDisplay(finalXml)
 
-        // loadDiagram validates and returns error if invalid
-        const validationError = onDisplayChart(fullXml)
-
-        if (validationError) {
-            console.warn("[display_diagram] Validation error:", validationError)
+        if (!prepared.valid) {
+            console.warn("[display_diagram] Validation error:", prepared.error)
             // Return error to model - sendAutomaticallyWhen will trigger retry
             if (DEBUG) {
                 console.log(
@@ -212,7 +212,7 @@ NEXT STEP: Call append_diagram with the continuation XML.
                 tool: "display_diagram",
                 toolCallId: toolCall.toolCallId,
                 state: "output-error",
-                errorText: `${validationError}
+                errorText: `${prepared.error}
 
 Please fix the XML issues and call display_diagram again with corrected XML.
 
@@ -229,6 +229,7 @@ ${finalXml}
                 )
             }
 
+            onDisplayChart(prepared.xml, true)
             addToolOutput({
                 tool: "display_diagram",
                 toolCallId: toolCall.toolCallId,
@@ -291,21 +292,23 @@ ${finalXml}
                                     formatValidationFeedback(result),
                                 )
                             }
-                            updateValidationState(toolCall.toolCallId, "failed", {
-                                attempt: 1,
-                                maxAttempts: MAX_VALIDATION_RETRIES,
-                                result,
-                                imageData: capturedPngData,
-                            })
+                            updateValidationState(
+                                toolCall.toolCallId,
+                                "failed",
+                                {
+                                    attempt: 1,
+                                    maxAttempts: MAX_VALIDATION_RETRIES,
+                                    result,
+                                    imageData: capturedPngData,
+                                },
+                            )
                             return
                         }
 
                         const hasWarnings = result.issues.length > 0
                         updateValidationState(
                             toolCall.toolCallId,
-                            hasWarnings
-                                ? "success_with_warnings"
-                                : "success",
+                            hasWarnings ? "success_with_warnings" : "success",
                             { result, imageData: capturedPngData },
                         )
                     } catch (error) {
@@ -497,15 +500,14 @@ Start your continuation with the NEXT character after where it stopped.`,
             const finalXml = partialXmlRef.current
             partialXmlRef.current = "" // Reset
 
-            const fullXml = wrapWithMxFile(finalXml)
-            const validationError = onDisplayChart(fullXml)
+            const prepared = prepareDiagramXmlForDisplay(finalXml)
 
-            if (validationError) {
+            if (!prepared.valid) {
                 addToolOutput({
                     tool: "append_diagram",
                     toolCallId: toolCall.toolCallId,
                     state: "output-error",
-                    errorText: `Validation error after assembly: ${validationError}
+                    errorText: `Validation error after assembly: ${prepared.error}
 
 Assembled XML:
 \`\`\`xml
@@ -515,6 +517,7 @@ ${finalXml.substring(0, 2000)}...
 Please use display_diagram with corrected XML.`,
                 })
             } else {
+                onDisplayChart(prepared.xml, true)
                 addToolOutput({
                     tool: "append_diagram",
                     toolCallId: toolCall.toolCallId,

@@ -1,7 +1,7 @@
 from app.models.server_models import ServerModelEntry
 from app.models.validate_model import ValidateModelRequest
 from app.routes.server_models import resolve_server_model_credentials
-from app.routes.validate_model import _build_litellm_kwargs
+from app.routes.validate_model import _build_openai_client_kwargs
 
 
 class TestResolveServerModelCredentials:
@@ -42,7 +42,7 @@ class TestResolveServerModelCredentials:
 
 
 class TestValidateModelKwargs:
-    def test_validate_model_uses_api_base_for_custom_base_urls(self, settings_override):
+    def test_validate_model_uses_base_url_for_custom_base_urls(self, settings_override):
         body = ValidateModelRequest(
             provider="openai",
             modelId="gpt-4o",
@@ -50,8 +50,7 @@ class TestValidateModelKwargs:
             baseUrl="https://custom-openai.example/v1",
         )
 
-        kwargs = _build_litellm_kwargs(body, "openai", "gpt-4o", settings_override)
+        kwargs = _build_openai_client_kwargs(body, "openai", settings_override)
 
         assert kwargs["api_key"] == "sk-test"
-        assert kwargs["api_base"] == "https://custom-openai.example/v1"
-        assert "base_url" not in kwargs
+        assert kwargs["base_url"] == "https://custom-openai.example/v1"

@@ -353,6 +353,7 @@ async def chat(
                 headers={
                     "X-Accel-Buffering": "no",
                     "Cache-Control": "no-cache, no-store, no-transform",
+                    "x-vercel-ai-ui-message-stream": "v1",
                     "Connection": "keep-alive",
                 },
             )
@@ -489,6 +490,7 @@ async def chat(
         headers={
             "X-Accel-Buffering": "no",
             "Cache-Control": "no-cache, no-store, no-transform",
+            "x-vercel-ai-ui-message-stream": "v1",
             "Connection": "keep-alive",
         },
     )

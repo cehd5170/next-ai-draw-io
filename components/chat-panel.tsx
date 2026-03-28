@@ -377,6 +377,7 @@ export default function ChatPanel({
         setMessages,
         stop,
     } = useChat({
+        experimental_throttle: 50,
         transport: new DefaultChatTransport({
             api: getApiEndpoint("/api/chat"),
         }),
@@ -517,6 +518,27 @@ export default function ChatPanel({
             return true
         },
     })
+
+    useEffect(() => {
+        if (!DEBUG || messages.length === 0) return
+
+        const lastMessage = messages[messages.length - 1]
+        const partTypes =
+            lastMessage.parts?.map((part) =>
+                part.type === "text"
+                    ? "text"
+                    : part.type === "reasoning"
+                      ? "reasoning"
+                      : part.type,
+            ) ?? []
+
+        console.log("[useChat:messages]", {
+            status,
+            messageCount: messages.length,
+            lastRole: lastMessage.role,
+            partTypes,
+        })
+    }, [messages, status])
 
     // Store sendMessage in ref for use in callbacks (like handleImproveWithSuggestions)
     useEffect(() => {
@@ -1390,6 +1412,7 @@ export default function ChatPanel({
                     messages={messages}
                     setInput={setInput}
                     setFiles={handleFileChange}
+                    currentDiagramXmlRef={chartXMLRef}
                     processedToolCallsRef={processedToolCallsRef}
                     editDiagramOriginalXmlRef={editDiagramOriginalXmlRef}
                     sessionId={sessionId}

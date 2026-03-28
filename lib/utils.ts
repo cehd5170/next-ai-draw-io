@@ -370,6 +370,82 @@ export function wrapWithMxFile(xml: string): string {
     return `<mxfile><diagram name="Page-1" id="page-1"><mxGraphModel><root>${ROOT_CELLS}${content}</root></mxGraphModel></diagram></mxfile>`
 }
 
+export interface PreparedDiagramXmlResult {
+    valid: boolean
+    xml: string
+    error: string | null
+    fixes: string[]
+}
+
+function normalizeRawDiagramFragment(xml: string): {
+    normalized: string
+    fixes: string[]
+} {
+    let normalized = xml
+    const fixes: string[] = []
+
+    const closingTagTypos = [
+        { pattern: /<\/Cell>/gi, replacement: "</mxCell>", label: "</Cell>" },
+        {
+            pattern: /<\/mxElement>/gi,
+            replacement: "</mxCell>",
+            label: "</mxElement>",
+        },
+    ]
+    for (const { pattern, replacement, label } of closingTagTypos) {
+        if (pattern.test(normalized)) {
+            normalized = normalized.replace(pattern, replacement)
+            fixes.push(`Fixed closing tag typo ${label} to ${replacement}`)
+        }
+    }
+
+    const duplicateSelfClosingFixes = [
+        {
+            tag: "mxGeometry",
+            pattern: /(<mxGeometry\b[^>]*\/>)\s*<\/mxGeometry>/gi,
+        },
+        { tag: "mxPoint", pattern: /(<mxPoint\b[^>]*\/>)\s*<\/mxPoint>/gi },
+        {
+            tag: "mxRectangle",
+            pattern: /(<mxRectangle\b[^>]*\/>)\s*<\/mxRectangle>/gi,
+        },
+    ]
+    for (const { tag, pattern } of duplicateSelfClosingFixes) {
+        if (pattern.test(normalized)) {
+            normalized = normalized.replace(pattern, "$1")
+            fixes.push(
+                `Removed duplicate closing tag after self-closing ${tag}`,
+            )
+        }
+    }
+
+    return { normalized, fixes }
+}
+
+/**
+ * Normalize raw mxCell fragments into full draw.io XML and apply the same
+ * validation / auto-fix pipeline used by the preview renderer.
+ *
+ * This keeps preview rendering and final tool execution on the same code path,
+ * so fixable XML issues do not show up as preview-success / final-failure.
+ */
+export function prepareDiagramXmlForDisplay(
+    rawXml: string,
+): PreparedDiagramXmlResult {
+    const rawNormalization = normalizeRawDiagramFragment(rawXml)
+    const normalizedXml = wrapWithMxFile(
+        convertToLegalXml(rawNormalization.normalized),
+    )
+    const validation = validateAndFixXml(normalizedXml)
+
+    return {
+        valid: validation.valid,
+        xml: validation.fixed || normalizedXml,
+        error: validation.error,
+        fixes: [...rawNormalization.fixes, ...validation.fixes],
+    }
+}
+
 /**
  * Replace nodes in a Draw.io XML diagram
  * @param currentXML - The original Draw.io XML string
@@ -890,6 +966,18 @@ export function validateMxCellStructure(xml: string): string | null {
         const doc = parser.parseFromString(xml, "text/xml")
         const parseError = doc.querySelector("parsererror")
         if (parseError) {
+            if (/<mxGeometry\b[^>]*\/>\s*<\/mxGeometry>/i.test(xml)) {
+                return "Invalid XML: Found <mxGeometry .../></mxGeometry>. mxGeometry is self-closing, so remove the trailing </mxGeometry>."
+            }
+            if (/<mxPoint\b[^>]*\/>\s*<\/mxPoint>/i.test(xml)) {
+                return "Invalid XML: Found <mxPoint .../></mxPoint>. mxPoint is self-closing, so remove the trailing </mxPoint>."
+            }
+            if (/<mxRectangle\b[^>]*\/>\s*<\/mxRectangle>/i.test(xml)) {
+                return "Invalid XML: Found <mxRectangle .../></mxRectangle>. mxRectangle is self-closing, so remove the trailing </mxRectangle>."
+            }
+            if (/<\/Cell>/i.test(xml)) {
+                return "Invalid XML: Found </Cell>. The closing tag must be </mxCell>."
+            }
             return `Invalid XML: The XML contains syntax errors (likely unescaped special characters like <, >, & in attribute values). Please escape special characters: use &lt; for <, &gt; for >, &amp; for &, &quot; for ". Regenerate the diagram with properly escaped values.`
         }
 
@@ -1105,6 +1193,28 @@ export function autoFixXml(xml: string): { fixed: string; fixes: string[] } {
     if (malformedClosingTag.test(fixed)) {
         fixed = fixed.replace(/<\/([a-zA-Z][a-zA-Z0-9]*)\s*\/>/g, "</$1>")
         fixes.push("Fixed malformed closing tags (</tag/> to </tag>)")
+    }
+
+    // 3c2. Fix duplicated closing tags after self-closing draw.io helper tags.
+    // LLMs sometimes emit `<mxGeometry .../></mxGeometry>` which is always invalid.
+    const duplicateSelfClosingFixes = [
+        {
+            tag: "mxGeometry",
+            pattern: /(<mxGeometry\b[^>]*\/>)\s*<\/mxGeometry>/gi,
+        },
+        { tag: "mxPoint", pattern: /(<mxPoint\b[^>]*\/>)\s*<\/mxPoint>/gi },
+        {
+            tag: "mxRectangle",
+            pattern: /(<mxRectangle\b[^>]*\/>)\s*<\/mxRectangle>/gi,
+        },
+    ]
+    for (const { tag, pattern } of duplicateSelfClosingFixes) {
+        if (pattern.test(fixed)) {
+            fixed = fixed.replace(pattern, "$1")
+            fixes.push(
+                `Removed duplicate closing tag after self-closing ${tag}`,
+            )
+        }
     }
 
     // 3d. Fix missing space between attributes like vertex="1"parent="1"

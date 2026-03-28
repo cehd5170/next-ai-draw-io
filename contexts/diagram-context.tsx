@@ -17,7 +17,11 @@ interface DiagramContextType {
     latestSvg: string
     diagramHistory: { svg: string; xml: string }[]
     setDiagramHistory: (history: { svg: string; xml: string }[]) => void
-    loadDiagram: (chart: string, skipValidation?: boolean) => string | null
+    loadDiagram: (
+        chart: string,
+        skipValidation?: boolean,
+        syncState?: boolean,
+    ) => string | null
     handleExport: () => void
     handleExportWithoutHistory: () => void
     resolverRef: React.Ref<((value: string) => void) | null>
@@ -184,6 +188,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     const loadDiagram = (
         chart: string,
         skipValidation?: boolean,
+        syncState: boolean = true,
     ): string | null => {
         let xmlToLoad = chart
 
@@ -207,8 +212,15 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             }
         }
 
-        // Keep chartXML in sync even when diagrams are injected (e.g., display_diagram tool)
-        setChartXML(xmlToLoad)
+        // Keep the latest XML in a ref even for preview-only updates so Draw.io
+        // can recover the most recent diagram after remounts.
+        chartXMLRef.current = xmlToLoad
+
+        // Skip state sync for high-frequency streaming previews to avoid
+        // re-rendering the full app tree on every partial diagram update.
+        if (syncState) {
+            setChartXML(xmlToLoad)
+        }
 
         if (drawioRef.current) {
             drawioRef.current.load({
@@ -240,6 +252,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
         }
 
         const extractedXML = extractDiagramXML(data.data)
+        chartXMLRef.current = extractedXML
         setChartXML(extractedXML)
         setLatestSvg(data.data)
 

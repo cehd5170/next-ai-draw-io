@@ -38,8 +38,8 @@ import {
     applyDiagramOperations,
     convertToLegalXml,
     extractCompleteMxCells,
-    replaceNodes,
-    validateAndFixXml,
+    prepareDiagramXmlForDisplay,
+    wrapWithMxFile,
 } from "@/lib/utils"
 
 // Helper to extract complete operations from streaming input
@@ -171,6 +171,7 @@ interface ChatMessageDisplayProps {
     messages: UIMessage[]
     setInput: (input: string) => void
     setFiles: (files: File[]) => void
+    currentDiagramXmlRef: MutableRefObject<string>
     processedToolCallsRef: MutableRefObject<Set<string>>
     editDiagramOriginalXmlRef: MutableRefObject<Map<string, string>>
     sessionId?: string
@@ -190,6 +191,7 @@ export function ChatMessageDisplay({
     messages,
     setInput,
     setFiles,
+    currentDiagramXmlRef,
     processedToolCallsRef,
     editDiagramOriginalXmlRef,
     sessionId,
@@ -205,7 +207,7 @@ export function ChatMessageDisplay({
     onImproveWithSuggestions,
 }: ChatMessageDisplayProps) {
     const dict = useDictionary()
-    const { chartXML, loadDiagram: onDisplayChart } = useDiagram()
+    const { loadDiagram: onDisplayChart } = useDiagram()
     const messagesEndRef = useRef<HTMLDivElement>(null)
     const scrollTopRef = useRef<HTMLDivElement>(null)
     const previousXML = useRef<string>("")
@@ -372,13 +374,9 @@ export function ChatMessageDisplay({
 
             const convertedXml = convertToLegalXml(currentXml)
             if (convertedXml !== previousXML.current) {
-                // Parse and validate XML BEFORE calling replaceNodes
+                // Ensure the sanitized preview XML is still well-formed before loading it.
                 const parser = new DOMParser()
-                // Wrap in root element for parsing multiple mxCell elements
-                const testDoc = parser.parseFromString(
-                    `<root>${convertedXml}</root>`,
-                    "text/xml",
-                )
+                const testDoc = parser.parseFromString(convertedXml, "text/xml")
                 const parseError = testDoc.querySelector("parsererror")
 
                 if (parseError) {
@@ -390,29 +388,22 @@ export function ChatMessageDisplay({
                 }
 
                 try {
-                    // If chartXML is empty, create a default mxfile structure to use with replaceNodes
-                    // This ensures the XML is properly wrapped in mxfile/diagram/mxGraphModel format
-                    const baseXML =
-                        chartXML ||
-                        `<mxfile><diagram name="Page-1" id="page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>`
-                    const replacedXML = replaceNodes(baseXML, convertedXml)
+                    const wrappedXml = wrapWithMxFile(convertedXml)
 
                     // During streaming (showToast=false), skip heavy validation for lower latency
-                    // The quick DOM parse check above catches malformed XML
+                    // and avoid syncing React state on every preview frame.
                     // Full validation runs on final output (showToast=true)
                     if (!showToast) {
                         previousXML.current = convertedXml
-                        onDisplayChart(replacedXML, true)
+                        onDisplayChart(wrappedXml, true, false)
                         return
                     }
 
-                    // Final output: run full validation and auto-fix
-                    const validation = validateAndFixXml(replacedXML)
-                    if (validation.valid) {
+                    // Final output: use the same sanitize/fix pipeline as tool execution.
+                    const prepared = prepareDiagramXmlForDisplay(currentXml)
+                    if (prepared.valid) {
                         previousXML.current = convertedXml
-                        // Use fixed XML if available, otherwise use original
-                        const xmlToLoad = validation.fixed || replacedXML
-                        onDisplayChart(xmlToLoad, true)
+                        onDisplayChart(prepared.xml, true)
                     } else {
                         toast.error(dict.errors.validationFailed)
                     }
@@ -425,7 +416,12 @@ export function ChatMessageDisplay({
                 }
             }
         },
-        [chartXML, onDisplayChart],
+        [
+            dict.errors.failedToProcess,
+            dict.errors.malformedXml,
+            dict.errors.validationFailed,
+            onDisplayChart,
+        ],
     )
 
     // Track previous message count to detect bulk loads vs streaming
@@ -556,7 +552,9 @@ export function ChatMessageDisplay({
                                     toolCallId,
                                 )
                             ) {
-                                if (!chartXML) {
+                                const currentDiagramXml =
+                                    currentDiagramXmlRef.current
+                                if (!currentDiagramXml) {
                                     console.warn(
                                         "[edit_diagram streaming] No chart XML available",
                                     )
@@ -564,7 +562,7 @@ export function ChatMessageDisplay({
                                 }
                                 editDiagramOriginalXmlRef.current.set(
                                     toolCallId,
-                                    chartXML,
+                                    currentDiagramXml,
                                 )
                             }
 
@@ -663,7 +661,7 @@ export function ChatMessageDisplay({
         // The cleanup runs on every re-render (when messages changes),
         // which would cancel the timeout before it fires.
         // Let the timeouts complete naturally - they're harmless if component unmounts.
-    }, [messages, handleDisplayChart, chartXML])
+    }, [messages, handleDisplayChart])
 
     return (
         <ScrollArea className="h-full w-full scrollbar-thin">
