@@ -23,14 +23,32 @@ class _FakeChat:
         self.completions = _FakeCompletions(calls, stream_factory)
 
 
+class _FakeResponses:
+    """Fake for client.responses.create (OpenAI Responses API)."""
+
+    def __init__(self, calls: list[dict], stream_factory):
+        self.calls = calls
+        self._stream_factory = stream_factory
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._stream_factory()
+
+
 class _FakeAsyncOpenAI:
     instances: list["_FakeAsyncOpenAI"] = []
     stream_factory = None
+    responses_stream_factory = None
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         self.calls: list[dict] = []
+        self.responses_calls: list[dict] = []
         self.chat = _FakeChat(self.calls, self.__class__.stream_factory)
+        self.responses = _FakeResponses(
+            self.responses_calls,
+            self.__class__.responses_stream_factory or self.__class__.stream_factory,
+        )
         _FakeAsyncOpenAI.instances.append(self)
 
 
@@ -251,30 +269,26 @@ class TestChatServiceToolStreaming:
         assert delta_events[1]["inputTextDelta"] == '<mxCell id=\\"2\\" value=\\"A\\"/>"}'
 
     @pytest.mark.asyncio
-    async def test_stream_chat_uses_max_completion_tokens_for_gpt5_models(
+    async def test_stream_chat_uses_responses_api_for_gpt5_models(
         self,
         settings_override,
         monkeypatch,
     ):
+        """GPT-5 family models use Responses API with max_output_tokens."""
         service = ChatService(settings_override)
 
-        async def _fake_stream():
+        async def _fake_responses_stream():
+            yield SimpleNamespace(type="response.output_text.delta", delta="done", item_id="item_1", output_index=0, content_index=0, sequence_number=1)
             yield SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(
-                            content="done",
-                            reasoning_content=None,
-                            tool_calls=None,
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=None,
+                type="response.completed",
+                response=SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+                    output=[],
+                ),
             )
 
         _FakeAsyncOpenAI.instances.clear()
-        _FakeAsyncOpenAI.stream_factory = _fake_stream
+        _FakeAsyncOpenAI.responses_stream_factory = _fake_responses_stream
         monkeypatch.setattr("app.services.chat_service.AsyncOpenAI", _FakeAsyncOpenAI)
 
         _ = [
@@ -292,39 +306,43 @@ class TestChatServiceToolStreaming:
             )
         ]
 
-        call_kwargs = _FakeAsyncOpenAI.instances[0].calls[0]
+        call_kwargs = _FakeAsyncOpenAI.instances[0].responses_calls[0]
         assert call_kwargs["model"] == "gpt-5.4-nano"
-        assert call_kwargs["max_completion_tokens"] == settings_override.MAX_OUTPUT_TOKENS
-        assert "max_tokens" not in call_kwargs
+        assert call_kwargs["max_output_tokens"] == settings_override.MAX_OUTPUT_TOKENS
+        assert call_kwargs["stream"] is True
 
     @pytest.mark.asyncio
-    async def test_stream_chat_omits_reasoning_effort_when_tools_are_enabled(
+    async def test_stream_chat_passes_reasoning_effort_via_responses_api(
         self,
         settings_override,
         monkeypatch,
     ):
+        """Reasoning effort is passed via the Responses API reasoning param."""
         service = ChatService(settings_override)
 
-        async def _fake_stream():
+        async def _fake_responses_stream():
             yield SimpleNamespace(
-                choices=[
-                    SimpleNamespace(
-                        delta=SimpleNamespace(
-                            content="done",
-                            reasoning_content=None,
-                            tool_calls=None,
-                        ),
-                        finish_reason="stop",
-                    )
-                ],
-                usage=None,
+                type="response.reasoning_summary_text.delta",
+                delta="thinking...",
+                item_id="item_1",
+                output_index=0,
+                summary_index=0,
+                sequence_number=1,
+            )
+            yield SimpleNamespace(type="response.output_text.delta", delta="done", item_id="item_2", output_index=1, content_index=0, sequence_number=2)
+            yield SimpleNamespace(
+                type="response.completed",
+                response=SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+                    output=[],
+                ),
             )
 
         _FakeAsyncOpenAI.instances.clear()
-        _FakeAsyncOpenAI.stream_factory = _fake_stream
+        _FakeAsyncOpenAI.responses_stream_factory = _fake_responses_stream
         monkeypatch.setattr("app.services.chat_service.AsyncOpenAI", _FakeAsyncOpenAI)
 
-        _ = [
+        events = [
             event
             async for event in service.stream_chat(
                 messages=[{"role": "user", "content": "say hi"}],
@@ -340,5 +358,77 @@ class TestChatServiceToolStreaming:
             )
         ]
 
-        call_kwargs = _FakeAsyncOpenAI.instances[0].calls[0]
-        assert "reasoning_effort" not in call_kwargs
+        call_kwargs = _FakeAsyncOpenAI.instances[0].responses_calls[0]
+        assert call_kwargs["reasoning"] == {"effort": "medium"}
+
+        # Verify reasoning events are emitted
+        parsed = [json.loads(e[6:]) for e in events if e.startswith("data: {")]
+        event_types = [e["type"] for e in parsed]
+        assert "reasoning-start" in event_types
+        assert "reasoning-delta" in event_types
+        assert "reasoning-end" in event_types
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_marks_complete_tool_input_as_truncated_on_length_finish(
+        self,
+        settings_override,
+        monkeypatch,
+    ):
+        """Truncation detection works with Chat Completions API (non-reasoning models)."""
+        service = ChatService(settings_override)
+
+        async def _fake_stream():
+            yield SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(
+                            content=None,
+                            reasoning_content=None,
+                            tool_calls=[
+                                SimpleNamespace(
+                                    index=0,
+                                    id="provider_call_3",
+                                    function=SimpleNamespace(
+                                        name="display_diagram",
+                                        arguments='{"xml":"<mxCell id=\\"2\\" value=\\"A\\"/>"}',
+                                    ),
+                                )
+                            ],
+                        ),
+                        finish_reason="length",
+                    )
+                ],
+                usage=None,
+            )
+
+        _FakeAsyncOpenAI.instances.clear()
+        _FakeAsyncOpenAI.stream_factory = _fake_stream
+        monkeypatch.setattr("app.services.chat_service.AsyncOpenAI", _FakeAsyncOpenAI)
+
+        events = [
+            event
+            async for event in service.stream_chat(
+                messages=[{"role": "user", "content": "draw a diagram"}],
+                model_config=ModelConfig(
+                    provider="openai",
+                    model_id="openai/gpt-4o",
+                    api_key="test-key",
+                    base_url=None,
+                ),
+                system_prompt="You are a diagram assistant.",
+                xml_context="",
+            )
+        ]
+
+        parsed_events = [
+            json.loads(event[6:])
+            for event in events
+            if event.startswith("data: {")
+        ]
+        available_event = next(
+            event
+            for event in parsed_events
+            if event["type"] == "tool-input-available"
+        )
+        assert available_event["input"]["xml"] == '<mxCell id="2" value="A"/>'
+        assert available_event["input"]["truncated"] is True

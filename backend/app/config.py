@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from functools import cached_property, lru_cache
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -81,12 +81,16 @@ class Settings(BaseSettings):
     # LLM generation
     # ------------------------------------------------------------------
     MAX_OUTPUT_TOKENS: int = Field(
-        default=16_384,
+        default=32_768,
         description="Maximum tokens the LLM may generate per response",
     )
     MAX_TOOL_STEPS: int = Field(
         default=8,
         description="Maximum number of tool-call / agentic steps per request",
+    )
+    PDF_INPUT_MODE: Literal["text", "base64"] = Field(
+        default="text",
+        description="How PDF attachments are delivered to the model: 'text' extracts text server-side, 'base64' forwards the raw PDF",
     )
     ENABLE_HISTORY_XML_REPLACE: bool = Field(
         default=True,

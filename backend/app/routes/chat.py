@@ -303,10 +303,11 @@ async def chat(
     #    Only for single-turn conversations on an empty / minimal canvas.
     # ------------------------------------------------------------------
     logger.info(
-        "Chat request: %d messages, has_xml=%s, minimal_diagram=%s",
+        "Chat request: %d messages, has_xml=%s, minimal_diagram=%s, pdf_mode=%s",
         len(request.messages),
         bool(request.xml),
         is_minimal_diagram(request.xml or "") if len(request.messages) == 1 else "N/A",
+        request.pdfMode,
     )
     if len(request.messages) == 1 and is_minimal_diagram(request.xml or ""):
         first_msg = request.messages[0]
@@ -474,6 +475,7 @@ async def chat(
             system_prompt=system_prompt,
             xml_context=xml_context,
             current_xml=request.xml or "",
+            pdf_mode=request.pdfMode if request.pdfMode is not None else settings.PDF_INPUT_MODE,
             shape_library_dir=_SHAPE_LIBRARY_DIR,
             preferred_shape_library=preferred_shape_library,
             force_diagram_tool=force_diagram_tool,

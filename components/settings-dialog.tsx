@@ -71,6 +71,8 @@ interface SettingsDialogProps {
     onMinimalStyleChange?: (value: boolean) => void
     vlmValidationEnabled?: boolean
     onVlmValidationChange?: (value: boolean) => void
+    pdfInputMode?: "text" | "base64"
+    onPdfInputModeChange?: (value: "text" | "base64") => void
     onOpenModelConfig?: () => void
     customSystemMessage?: string
     onCustomSystemMessageChange?: (value: string) => void
@@ -97,6 +99,8 @@ function SettingsContent({
     onMinimalStyleChange = () => {},
     vlmValidationEnabled = false,
     onVlmValidationChange = () => {},
+    pdfInputMode = "text",
+    onPdfInputModeChange = () => {},
     onOpenModelConfig,
     customSystemMessage = "",
     onCustomSystemMessageChange = () => {},
@@ -460,6 +464,33 @@ function SettingsContent({
                                     : dict.settings.disabled}
                             </span>
                         </div>
+                    </SettingItem>
+
+                    <SettingItem
+                        label="PDF Input Mode"
+                        description="Choose whether PDFs are extracted to text on the server or forwarded to the model as base64 file input."
+                    >
+                        <Select
+                            value={pdfInputMode}
+                            onValueChange={(value: "text" | "base64") =>
+                                onPdfInputModeChange(value)
+                            }
+                        >
+                            <SelectTrigger
+                                id="pdf-input-mode-select"
+                                className="w-[140px] h-9 rounded-xl"
+                            >
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="text">
+                                    Parse To Text
+                                </SelectItem>
+                                <SelectItem value="base64">
+                                    Send Base64
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
                     </SettingItem>
 
                     {/* Custom System Message */}

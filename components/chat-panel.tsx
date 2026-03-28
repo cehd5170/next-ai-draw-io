@@ -191,6 +191,7 @@ export default function ChatPanel({
     const [maxFiles, setMaxFiles] = useState(5)
     const [minimalStyle, setMinimalStyle] = useState(false)
     const [vlmValidationEnabled, setVlmValidationEnabled] = useState(false)
+    const [pdfInputMode, setPdfInputMode] = useState<"text" | "base64">("text")
     const [customSystemMessage, setCustomSystemMessage] = useState("")
     const [shouldFocusInput, setShouldFocusInput] = useState(false)
 
@@ -207,6 +208,13 @@ export default function ChatPanel({
         const stored = localStorage.getItem(STORAGE_KEYS.vlmValidationEnabled)
         if (stored !== null) {
             setVlmValidationEnabled(stored === "true")
+        }
+    }, [])
+
+    useEffect(() => {
+        const stored = localStorage.getItem(STORAGE_KEYS.pdfInputMode)
+        if (stored === "text" || stored === "base64") {
+            setPdfInputMode(stored)
         }
     }, [])
 
@@ -334,6 +342,11 @@ export default function ChatPanel({
     const handleCustomSystemMessageChange = useCallback((value: string) => {
         setCustomSystemMessage(value)
         localStorage.setItem(STORAGE_KEYS.customSystemMessage, value)
+    }, [])
+
+    const handlePdfInputModeChange = useCallback((value: "text" | "base64") => {
+        setPdfInputMode(value)
+        localStorage.setItem(STORAGE_KEYS.pdfInputMode, value)
     }, [])
 
     // Ref to store the sendMessage function for use in callbacks
@@ -1087,7 +1100,13 @@ export default function ChatPanel({
         sendMessage(
             { parts },
             {
-                body: { xml, previousXml, sessionId, customSystemMessage },
+                body: {
+                    xml,
+                    previousXml,
+                    sessionId,
+                    customSystemMessage,
+                    pdfMode: pdfInputMode,
+                },
                 headers: {
                     "x-access-code": config.accessCode,
                     ...(config.aiProvider && {
@@ -1480,6 +1499,8 @@ export default function ChatPanel({
                 onMinimalStyleChange={setMinimalStyle}
                 vlmValidationEnabled={vlmValidationEnabled}
                 onVlmValidationChange={handleVlmValidationChange}
+                pdfInputMode={pdfInputMode}
+                onPdfInputModeChange={handlePdfInputModeChange}
                 customSystemMessage={customSystemMessage}
                 onCustomSystemMessageChange={handleCustomSystemMessageChange}
                 onOpenModelConfig={() => setShowModelConfigDialog(true)}

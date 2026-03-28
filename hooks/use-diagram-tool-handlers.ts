@@ -151,7 +151,10 @@ export function useDiagramToolHandlers({
         toolCall: ToolCall,
         addToolOutput: AddToolOutputFn,
     ) => {
-        const { xml } = toolCall.input as { xml: string }
+        const { xml, truncated } = toolCall.input as {
+            xml: string
+            truncated?: boolean
+        }
 
         // DEBUG: Log raw input to diagnose false truncation detection
         if (DEBUG) {
@@ -163,7 +166,7 @@ export function useDiagramToolHandlers({
         }
 
         // Check if XML is truncated (incomplete mxCell indicates truncated output)
-        const isTruncated = !isMxCellXmlComplete(xml)
+        const isTruncated = Boolean(truncated) || !isMxCellXmlComplete(xml)
         if (DEBUG) {
             console.log("[display_diagram] isTruncated:", isTruncated)
         }
@@ -460,7 +463,10 @@ Please check cell IDs and retry, or use display_diagram to regenerate.`,
         toolCall: ToolCall,
         addToolOutput: AddToolOutputFn,
     ) => {
-        const { xml } = toolCall.input as { xml: string }
+        const { xml, truncated } = toolCall.input as {
+            xml: string
+            truncated?: boolean
+        }
 
         // Detect if LLM incorrectly started fresh instead of continuing
         // LLM should only output bare mxCells now, so wrapper tags indicate error
@@ -494,8 +500,9 @@ Start your continuation with the NEXT character after where it stopped.`,
 
         // Check if XML is now complete (last mxCell is complete)
         const isComplete = isMxCellXmlComplete(partialXmlRef.current)
+        const needsContinuation = Boolean(truncated) || !isComplete
 
-        if (isComplete) {
+        if (!needsContinuation && isComplete) {
             // Wrap and display the complete diagram
             const finalXml = partialXmlRef.current
             partialXmlRef.current = "" // Reset
@@ -525,12 +532,12 @@ Please use display_diagram with corrected XML.`,
                 })
             }
         } else {
-            // Still incomplete - signal to continue
+            // Still incomplete, or the provider explicitly reported truncation.
             addToolOutput({
                 tool: "append_diagram",
                 toolCallId: toolCall.toolCallId,
                 state: "output-error",
-                errorText: `XML still incomplete (mxCell not closed). Call append_diagram again to continue.
+                errorText: `${truncated ? "Output was truncated again." : "XML still incomplete (mxCell not closed)."} Call append_diagram again to continue.
 
 Current ending:
 \`\`\`

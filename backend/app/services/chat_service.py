@@ -43,6 +43,8 @@ import logging
 from pathlib import Path
 import random
 import string
+from dataclasses import dataclass as _dataclass
+from dataclasses import field as _field
 from typing import Any, AsyncGenerator
 
 from openai import AsyncOpenAI
@@ -127,6 +129,168 @@ def _tool_input_available_event(
             "input": parsed_args,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# OpenAI Responses API → Chat Completions chunk adapter
+# ---------------------------------------------------------------------------
+# The stream processing loop in ChatService.stream_chat expects
+# Chat-Completions-style chunks with ``chunk.choices[0].delta``.
+# This adapter converts Responses API events into that shape so the
+# downstream code works unchanged.
+# ---------------------------------------------------------------------------
+
+
+@_dataclass
+class _FakeFunction:
+    name: str | None = None
+    arguments: str | None = None
+
+
+@_dataclass
+class _FakeToolCall:
+    index: int = 0
+    id: str | None = None
+    function: _FakeFunction = _field(default_factory=_FakeFunction)
+
+
+@_dataclass
+class _FakeDelta:
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: list[_FakeToolCall] | None = None
+
+
+@_dataclass
+class _FakeChoice:
+    delta: _FakeDelta = _field(default_factory=_FakeDelta)
+    finish_reason: str | None = None
+
+
+@_dataclass
+class _FakeUsage:
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
+
+@_dataclass
+class _FakeChunk:
+    choices: list[_FakeChoice] = _field(default_factory=list)
+    usage: _FakeUsage | None = None
+
+
+class _ResponsesStreamAdapter:
+    """
+    Wraps an OpenAI Responses API async stream and yields
+    Chat-Completions-compatible ``_FakeChunk`` objects.
+    """
+
+    def __init__(self, stream: Any) -> None:
+        self._stream = stream
+        # Track tool call indices by item_id
+        self._tool_indices: dict[str, int] = {}
+        self._next_tool_idx = 0
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self) -> AsyncGenerator[_FakeChunk, None]:
+        async for event in self._stream:
+            event_type = getattr(event, "type", "")
+
+            # ── Reasoning summary text (visible reasoning) ───────────
+            if event_type == "response.reasoning_summary_text.delta":
+                delta = _FakeDelta(reasoning_content=event.delta)
+                yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
+
+            # ── Text delta ───────────────────────────────────────────
+            elif event_type == "response.output_text.delta":
+                delta = _FakeDelta(content=event.delta)
+                yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
+
+            # ── Function call arguments delta ────────────────────────
+            elif event_type == "response.function_call_arguments.delta":
+                item_id = getattr(event, "item_id", "")
+                if item_id not in self._tool_indices:
+                    self._tool_indices[item_id] = self._next_tool_idx
+                    self._next_tool_idx += 1
+                idx = self._tool_indices[item_id]
+                tc = _FakeToolCall(
+                    index=idx,
+                    function=_FakeFunction(arguments=event.delta),
+                )
+                delta = _FakeDelta(tool_calls=[tc])
+                yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
+
+            # ── Function call done — emit tool name + call_id ────────
+            elif event_type == "response.function_call_arguments.done":
+                item_id = getattr(event, "item_id", "")
+                if item_id not in self._tool_indices:
+                    self._tool_indices[item_id] = self._next_tool_idx
+                    self._next_tool_idx += 1
+                idx = self._tool_indices[item_id]
+                tc = _FakeToolCall(
+                    index=idx,
+                    id=getattr(event, "item_id", "") or _nanoid("call_"),
+                    function=_FakeFunction(
+                        name=getattr(event, "name", ""),
+                    ),
+                )
+                delta = _FakeDelta(tool_calls=[tc])
+                yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
+
+            # ── Output item added — capture function name + call_id ──
+            elif event_type == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if item and getattr(item, "type", "") == "function_call":
+                    item_id = getattr(item, "id", "") or getattr(item, "call_id", "")
+                    if item_id not in self._tool_indices:
+                        self._tool_indices[item_id] = self._next_tool_idx
+                        self._next_tool_idx += 1
+                    idx = self._tool_indices[item_id]
+                    call_id = getattr(item, "call_id", "") or item_id
+                    fn_name = getattr(item, "name", "")
+                    tc = _FakeToolCall(
+                        index=idx,
+                        id=call_id,
+                        function=_FakeFunction(name=fn_name),
+                    )
+                    delta = _FakeDelta(tool_calls=[tc])
+                    yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
+
+            # ── Completed — emit finish_reason + usage ───────────────
+            elif event_type in ("response.completed", "response.failed", "response.incomplete"):
+                finish_reason = "stop"
+                if event_type == "response.incomplete":
+                    finish_reason = "length"
+                usage_obj = None
+                resp = getattr(event, "response", None)
+                if resp:
+                    resp_usage = getattr(resp, "usage", None)
+                    if resp_usage:
+                        usage_obj = _FakeUsage(
+                            prompt_tokens=getattr(resp_usage, "input_tokens", 0) or 0,
+                            completion_tokens=getattr(resp_usage, "output_tokens", 0) or 0,
+                            total_tokens=(getattr(resp_usage, "input_tokens", 0) or 0)
+                            + (getattr(resp_usage, "output_tokens", 0) or 0),
+                        )
+                    # Check if any function calls present → finish_reason = "tool_calls"
+                    output = getattr(resp, "output", []) or []
+                    for item in output:
+                        if getattr(item, "type", "") == "function_call":
+                            finish_reason = "tool_calls"
+                            break
+                yield _FakeChunk(
+                    choices=[_FakeChoice(finish_reason=finish_reason)],
+                    usage=usage_obj,
+                )
+
+            # ── Error event ──────────────────────────────────────────
+            elif event_type == "response.error":
+                error = getattr(event, "error", None)
+                msg = str(error) if error else "Unknown Responses API error"
+                raise RuntimeError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +431,7 @@ class ChatService:
         system_prompt: str,
         xml_context: str,
         current_xml: str = "",
+        pdf_mode: str = "text",
         shape_library_dir: str = _SHAPE_LIBRARY_DIR,
         preferred_shape_library: str | None = None,
         force_diagram_tool: bool = False,
@@ -296,11 +461,12 @@ class ChatService:
             single_system=single_system,
         )
 
-        # Always extract text from PDFs server-side using pypdf.
-        # Native PDF file input (litellm ``file`` content blocks) is
-        # unreliable across providers — some models silently hang.
-        # Server-side extraction with pypdf is fast and universal.
-        _convert_pdf_file_blocks_to_text(messages)
+        # PDF delivery mode is request-controlled:
+        # - "text": extract text server-side with pypdf and send plain text
+        # - "base64": keep the original file block and let the model endpoint
+        #   handle the PDF natively if it supports it.
+        if pdf_mode == "text":
+            _convert_pdf_file_blocks_to_text(messages)
 
         tool_defs = _CACHED_TOOL_DEFS
 
@@ -349,18 +515,19 @@ class ChatService:
 
             try:
                 response_stream = None
+                tool_choice_val = self._select_tool_choice(
+                    step=step,
+                    force_diagram_tool=force_diagram_tool,
+                    preferred_shape_library=preferred_shape_library,
+                    shape_library_consulted=shape_library_consulted,
+                    diagram_tool_emitted=diagram_tool_emitted,
+                )
                 async for event_type, payload in self._await_with_sse_heartbeats(
                     self._create_provider_stream(
                         model_config=model_config,
                         messages=messages,
                         tools=tool_defs,
-                        tool_choice=self._select_tool_choice(
-                            step=step,
-                            force_diagram_tool=force_diagram_tool,
-                            preferred_shape_library=preferred_shape_library,
-                            shape_library_consulted=shape_library_consulted,
-                            diagram_tool_emitted=diagram_tool_emitted,
-                        ),
+                        tool_choice=tool_choice_val,
                     ),
                 ):
                     if event_type == "heartbeat":
@@ -706,6 +873,12 @@ class ChatService:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_openai_reasoning_model(model_id: str) -> bool:
+        """Return True when *model_id* is an OpenAI reasoning-capable model."""
+        lower = (model_id or "").lower()
+        return any(tok in lower for tok in ("o1", "o3", "o4", "gpt-5"))
+
     def _create_provider_stream(
         self,
         *,
@@ -727,26 +900,35 @@ class ChatService:
                 client_kwargs["project"] = self.settings.OPENAI_PROJECT
 
             client = AsyncOpenAI(**client_kwargs)
+            raw_model = self._provider_model_id(model_config.model_id)
+            reasoning_effort = model_config.extra_params.get("reasoning_effort")
+            reasoning_summary = model_config.extra_params.get("reasoning_summary")
+
+            # Use Responses API for reasoning models (supports reasoning + tools)
+            if self._is_openai_reasoning_model(raw_model):
+                return self._create_openai_responses_stream(
+                    client=client,
+                    model=raw_model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    reasoning_effort=reasoning_effort,
+                    reasoning_summary=reasoning_summary,
+                )
+
+            # Non-reasoning models: use Chat Completions API
             call_kwargs: dict[str, Any] = {
-                "model": self._provider_model_id(model_config.model_id),
+                "model": raw_model,
                 "messages": messages,
                 "stream": True,
                 "stream_options": {"include_usage": True},
                 "tools": tools,
                 "tool_choice": tool_choice,
+                "max_tokens": self.settings.MAX_OUTPUT_TOKENS,
             }
-            call_kwargs.update(
-                self._openai_token_limit_kwargs(
-                    call_kwargs["model"],
-                    self.settings.MAX_OUTPUT_TOKENS,
-                )
-            )
 
             if self.settings.TEMPERATURE is not None:
                 call_kwargs["temperature"] = self.settings.TEMPERATURE
-            reasoning_effort = model_config.extra_params.get("reasoning_effort")
-            if reasoning_effort and not tools:
-                call_kwargs["reasoning_effort"] = reasoning_effort
 
             return client.chat.completions.create(**call_kwargs)
 
@@ -769,6 +951,118 @@ class ChatService:
         call_kwargs.update(model_config.extra_params)
 
         return litellm.acompletion(**call_kwargs)  # type: ignore[attr-defined]
+
+    async def _create_openai_responses_stream(
+        self,
+        *,
+        client: AsyncOpenAI,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: str | dict[str, Any],
+        reasoning_effort: str | None = None,
+        reasoning_summary: str | None = None,
+    ) -> "_ResponsesStreamAdapter":
+        """
+        Create an OpenAI Responses API stream and return an adapter that
+        yields Chat-Completions-compatible chunks so the caller's stream
+        processing loop works unchanged.
+        """
+        # Convert Chat Completions tool defs → Responses API format
+        resp_tools: list[dict[str, Any]] = []
+        for td in tools:
+            fn = td.get("function", {})
+            resp_tools.append({
+                "type": "function",
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "parameters": fn.get("parameters", {}),
+                "strict": False,
+            })
+
+        # Convert tool_choice format
+        resp_tool_choice: Any = tool_choice
+        if isinstance(tool_choice, dict):
+            # {"type": "function", "function": {"name": "x"}} → {"type": "function", "name": "x"}
+            fn_info = tool_choice.get("function", {})
+            if fn_info.get("name"):
+                resp_tool_choice = {"type": "function", "name": fn_info["name"]}
+
+        # Convert messages: system role → developer role for Responses API
+        # Content parts need type remapping: text→input_text, image_url→input_image, file→input_file
+        resp_input: list[dict[str, Any]] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            if role == "system":
+                role = "developer"
+
+            # Preserve tool_calls / tool_call_id for multi-turn
+            if msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    resp_input.append({
+                        "type": "function_call",
+                        "call_id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "arguments": fn.get("arguments", "{}"),
+                    })
+                if msg.get("content"):
+                    resp_input.append({"role": role, "content": msg["content"]})
+                continue
+            if role == "tool":
+                resp_input.append({
+                    "type": "function_call_output",
+                    "call_id": msg.get("tool_call_id", ""),
+                    "output": msg.get("content", ""),
+                })
+                continue
+
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                converted_parts: list[dict[str, Any]] = []
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    ptype = part.get("type", "")
+                    if ptype == "text":
+                        converted_parts.append({"type": "input_text", "text": part.get("text", "")})
+                    elif ptype == "image_url":
+                        image_url = part.get("image_url", {})
+                        url = image_url.get("url", "") if isinstance(image_url, dict) else str(image_url)
+                        converted_parts.append({"type": "input_image", "image_url": url})
+                    elif ptype == "file":
+                        file_info = part.get("file", {})
+                        converted_parts.append({
+                            "type": "input_file",
+                            "file_data": file_info.get("file_data", ""),
+                            "filename": file_info.get("filename", "file"),
+                        })
+                    else:
+                        converted_parts.append(part)
+                content = converted_parts
+            resp_input.append({"role": role, "content": content})
+
+        call_kwargs: dict[str, Any] = {
+            "model": model,
+            "input": resp_input,
+            "stream": True,
+            "tools": resp_tools,
+            "tool_choice": resp_tool_choice,
+            "max_output_tokens": self.settings.MAX_OUTPUT_TOKENS,
+        }
+
+        if reasoning_effort:
+            reasoning_cfg: dict[str, Any] = {"effort": reasoning_effort}
+            # Default summary to "auto" so reasoning is visible in the frontend
+            reasoning_cfg["summary"] = reasoning_summary or "auto"
+            call_kwargs["reasoning"] = reasoning_cfg
+
+        if self.settings.TEMPERATURE is not None:
+            call_kwargs["temperature"] = self.settings.TEMPERATURE
+
+        logger.info("[OpenAI Responses API] model=%s, reasoning=%s", model, call_kwargs.get("reasoning"))
+        stream = await client.responses.create(**call_kwargs)
+        return _ResponsesStreamAdapter(stream)
 
     @staticmethod
     def _provider_model_id(model_id: str) -> str:
@@ -1079,6 +1373,8 @@ class ChatService:
 
         repaired = repair_tool_call_json(raw_json)
         if repaired is not None:
+            if output_truncated and name in ("display_diagram", "append_diagram"):
+                repaired["truncated"] = True
             return repaired
 
         # JSON repair failed.  If the LLM hit max_tokens while emitting a
@@ -1093,7 +1389,7 @@ class ChatService:
                     len(partial_xml),
                     name,
                 )
-                return {"xml": partial_xml}
+                return {"xml": partial_xml, "truncated": True}
 
         logger.warning(
             "Could not repair JSON for tool '%s'; using fallback input. "

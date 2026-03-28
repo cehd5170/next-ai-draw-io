@@ -129,6 +129,10 @@ class ChatRequest(BaseModel):
         max_length=5000,
         description="User-supplied instructions appended to the system prompt",
     )
+    pdfMode: Optional[Literal["text", "base64"]] = Field(
+        default=None,
+        description="How PDF attachments should be sent to the model (None = use server default PDF_INPUT_MODE)",
+    )
 
     @field_validator("customSystemMessage", mode="before")
     @classmethod
