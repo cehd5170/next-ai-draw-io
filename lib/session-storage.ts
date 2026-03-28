@@ -219,10 +219,23 @@ export function extractTitle(messages: StoredMessage[]): string {
     if (!firstUserMessage) return "New Chat"
 
     const textPart = firstUserMessage.parts.find((p) => p.type === "text")
-    if (!textPart || typeof textPart.text !== "string") return "New Chat"
+    const text =
+        textPart && typeof textPart.text === "string"
+            ? textPart.text.trim()
+            : ""
 
-    const text = textPart.text.trim()
-    if (!text) return "New Chat"
+    if (!text) {
+        const attachmentPart = firstUserMessage.parts.find(
+            (part) =>
+                (part.type === "file" || part.type === "image") &&
+                typeof part.filename === "string" &&
+                part.filename.trim().length > 0,
+        )
+        if (attachmentPart && typeof attachmentPart.filename === "string") {
+            return attachmentPart.filename.trim()
+        }
+        return "New Chat"
+    }
 
     // Truncate long titles
     if (text.length > MAX_TITLE_LENGTH) {
@@ -249,6 +262,16 @@ export function sanitizeMessage(message: unknown): StoredMessage | null {
             const p = part as Record<string, unknown>
             // Remove streaming-related fields
             const { isStreaming, streamingState, ...cleanPart } = p
+
+            // Avoid persisting large inline binary payloads in IndexedDB.
+            if (
+                (cleanPart.type === "file" || cleanPart.type === "image") &&
+                typeof cleanPart.url === "string" &&
+                cleanPart.url.startsWith("data:")
+            ) {
+                delete cleanPart.url
+            }
+
             return cleanPart as { type: string; [key: string]: unknown }
         })
     }
