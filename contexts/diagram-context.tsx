@@ -58,6 +58,39 @@ interface DiagramContextType {
 
 const DiagramContext = createContext<DiagramContextType | undefined>(undefined)
 
+const buildDrawioLayoutSequence = (layoutType: AutoLayoutType): string[] => {
+    if (layoutType === "mxHierarchicalLayout") {
+        return [
+            JSON.stringify({
+                layout: "mxHierarchicalLayout",
+                intraCellSpacing: 80,
+                interRankCellSpacing: 120,
+                interHierarchySpacing: 80,
+                parallelEdgeSpacing: 32,
+                parentBorder: 60,
+                resizeParent: 1,
+                moveParent: 1,
+                fineTuning: 1,
+            }),
+            JSON.stringify({
+                layout: "mxParallelEdgeLayout",
+                spacing: 24,
+            }),
+        ]
+    }
+
+    if (layoutType === "mxParallelEdgeLayout") {
+        return [
+            JSON.stringify({
+                layout: "mxParallelEdgeLayout",
+                spacing: 24,
+            }),
+        ]
+    }
+
+    return [JSON.stringify({ layout: layoutType })]
+}
+
 export function DiagramProvider({ children }: { children: React.ReactNode }) {
     const [chartXML, setChartXML] = useState<string>("")
     const [latestSvg, setLatestSvg] = useState<string>("")
@@ -266,7 +299,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 setTimeout(() => {
                     if (drawioRef.current) {
                         drawioRef.current.layout({
-                            layouts: [JSON.stringify({ layout: layoutType })],
+                            layouts: buildDrawioLayoutSequence(layoutType),
                         })
                     }
                 }, 500)
