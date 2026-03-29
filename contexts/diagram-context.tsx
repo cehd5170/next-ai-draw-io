@@ -15,13 +15,12 @@ import {
 
 export type AutoLayoutType =
     | "none"
-    | "auto"
-    | "verticalflow"
-    | "horizontalflow"
-    | "verticaltree"
-    | "horizontaltree"
-    | "organic"
-    | "circle"
+    | "mxHierarchicalLayout"
+    | "mxFastOrganicLayout"
+    | "mxCircleLayout"
+    | "mxCompactTreeLayout"
+    | "mxRadialTreeLayout"
+    | "mxParallelEdgeLayout"
 
 interface DiagramContextType {
     chartXML: string
@@ -32,6 +31,7 @@ interface DiagramContextType {
         chart: string,
         skipValidation?: boolean,
         syncState?: boolean,
+        layout?: AutoLayoutType,
     ) => string | null
     handleExport: () => void
     handleExportWithoutHistory: () => void
@@ -221,6 +221,7 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
         chart: string,
         skipValidation?: boolean,
         syncState: boolean = true,
+        layout?: AutoLayoutType,
     ): string | null => {
         let xmlToLoad = chart
 
@@ -259,14 +260,16 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 xml: xmlToLoad,
             })
 
-            // Apply auto-layout after diagram loads (if enabled)
-            const layoutType = autoLayoutTypeRef.current
+            // Apply auto-layout: use layout from tool call, fall back to global setting
+            const layoutType = layout || autoLayoutTypeRef.current
             if (layoutType && layoutType !== "none") {
                 setTimeout(() => {
                     if (drawioRef.current) {
-                        drawioRef.current.layout({ layouts: [layoutType] })
+                        drawioRef.current.layout({
+                            layouts: [JSON.stringify({ layout: layoutType })],
+                        })
                     }
-                }, 300)
+                }, 500)
             }
         }
 

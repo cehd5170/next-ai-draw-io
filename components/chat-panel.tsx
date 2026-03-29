@@ -25,14 +25,12 @@ import Image from "@/components/image-with-basepath"
 import { ModelConfigDialog } from "@/components/model-config-dialog"
 import { SettingsDialog } from "@/components/settings-dialog"
 import { useDiagram } from "@/contexts/diagram-context"
-import { useDiagramToolHandlers } from "@/hooks/use-diagram-tool-handlers"
 import { useDictionary } from "@/hooks/use-dictionary"
 import { getSelectedAIConfig, useModelConfig } from "@/hooks/use-model-config"
 import { useSessionManager } from "@/hooks/use-session-manager"
 import { useValidateDiagram } from "@/hooks/use-validate-diagram"
 import { getApiEndpoint } from "@/lib/base-path"
 import { findCachedResponse } from "@/lib/cached-responses"
-import { formatMessage } from "@/lib/i18n/utils"
 import { isPdfFile, isTextFile } from "@/lib/pdf-utils"
 import { sanitizeMessages } from "@/lib/session-storage"
 import { STORAGE_KEYS } from "@/lib/storage"
@@ -50,21 +48,6 @@ const STORAGE_SESSION_ID_KEY = "next-ai-draw-io-session-id"
 // sessionStorage keys
 const SESSION_STORAGE_INPUT_KEY = "next-ai-draw-io-input"
 
-// Type for message parts (tool calls and their states)
-interface MessagePart {
-    type: string
-    state?: string
-    toolName?: string
-    input?: { xml?: string; [key: string]: unknown }
-    [key: string]: unknown
-}
-
-interface ChatMessage {
-    role: string
-    parts?: MessagePart[]
-    [key: string]: unknown
-}
-
 interface ChatPanelProps {
     isVisible: boolean
     onToggleVisibility: () => void
@@ -75,13 +58,8 @@ interface ChatPanelProps {
     isMobile?: boolean
 }
 
-// Constants for tool states
-const TOOL_ERROR_STATE = "output-error" as const
 const DEBUG = process.env.NODE_ENV === "development"
-const MAX_AUTO_RETRY_COUNT = 3
 const MAX_VLM_RETRY_COUNT = 2 // Independent budget for VLM validation retries
-
-const MAX_CONTINUATION_RETRY_COUNT = 2 // Limit for truncation continuation retries
 
 function getMediaTypeFromDataUrl(dataUrl: string): string {
     if (!dataUrl.startsWith("data:")) {
@@ -90,29 +68,6 @@ function getMediaTypeFromDataUrl(dataUrl: string): string {
 
     const match = /^data:([^;,]+)[;,]/.exec(dataUrl)
     return match?.[1] || ""
-}
-
-/**
- * Check if auto-resubmit should happen based on tool errors.
- * Only checks the LAST tool part (most recent tool call), not all tool parts.
- */
-function hasToolErrors(messages: ChatMessage[]): boolean {
-    const lastMessage = messages[messages.length - 1]
-    if (!lastMessage || lastMessage.role !== "assistant") {
-        return false
-    }
-
-    const toolParts =
-        (lastMessage.parts as MessagePart[] | undefined)?.filter((part) =>
-            part.type?.startsWith("tool-"),
-        ) || []
-
-    if (toolParts.length === 0) {
-        return false
-    }
-
-    const lastToolPart = toolParts[toolParts.length - 1]
-    return lastToolPart?.state === TOOL_ERROR_STATE
 }
 
 export default function ChatPanel({
@@ -295,16 +250,8 @@ export default function ChatPanel({
         latestSvgRef.current = latestSvg
     }, [latestSvg])
 
-    // Ref to track consecutive auto-retry count (reset on user action)
-    const autoRetryCountRef = useRef(0)
-    // Ref to track continuation retry count (for truncation handling)
-    const continuationRetryCountRef = useRef(0)
     // Ref to track VLM validation retry count (independent from XML error retries)
     const vlmRetryCountRef = useRef(0)
-
-    // Ref to accumulate partial XML when output is truncated due to maxOutputTokens
-    // When partialXmlRef.current.length > 0, we're in continuation mode
-    const partialXmlRef = useRef<string>("")
 
     // Persist processed tool call IDs so collapsing the chat doesn't replay old tool outputs
     const processedToolCallsRef = useRef<Set<string>>(new Set())
@@ -325,7 +272,7 @@ export default function ChatPanel({
         Record<string, ValidationState>
     >({})
 
-    // Callback to update validation state from tool handler
+    // Callback to update validation state from server-executed diagram output processing
     const handleValidationStateChange = useCallback(
         (toolCallId: string, state: ValidationState) => {
             setValidationStates((prev) => ({
@@ -391,22 +338,6 @@ export default function ChatPanel({
     // VLM validation hook using AI SDK's useObject
     const { validateWithFallback } = useValidateDiagram()
 
-    // Diagram tool handlers (display_diagram, edit_diagram, append_diagram)
-    const { handleToolCall } = useDiagramToolHandlers({
-        partialXmlRef,
-        editDiagramOriginalXmlRef,
-        chartXMLRef,
-        onDisplayChart,
-        onFetchChart,
-        onExport,
-        captureValidationPng,
-        validateDiagram: validateWithFallback,
-        enableVlmValidation: vlmValidationEnabled,
-        sessionId,
-        onValidationStateChange: handleValidationStateChange,
-        onVlmValidationFailure: handleVlmValidationFailure,
-    })
-
     const {
         messages,
         sendMessage,
@@ -420,9 +351,6 @@ export default function ChatPanel({
         transport: new DefaultChatTransport({
             api: getApiEndpoint("/api/chat"),
         }),
-        onToolCall: async ({ toolCall }) => {
-            await handleToolCall({ toolCall }, addToolOutput)
-        },
         onError: (error) => {
             // Handle server-side quota limit (429 response)
             // AI SDK puts the full response body in error.message for non-OK responses
@@ -507,56 +435,6 @@ export default function ChatPanel({
             }
         },
         onFinish: () => {},
-        sendAutomaticallyWhen: ({ messages }) => {
-            const isInContinuationMode = partialXmlRef.current.length > 0
-
-            const shouldRetry = hasToolErrors(
-                messages as unknown as ChatMessage[],
-            )
-
-            if (!shouldRetry) {
-                // No error, reset retry count and clear state
-                autoRetryCountRef.current = 0
-                continuationRetryCountRef.current = 0
-                vlmRetryCountRef.current = 0
-                partialXmlRef.current = ""
-                return false
-            }
-
-            // Continuation mode: limited retries for truncation handling
-            if (isInContinuationMode) {
-                if (
-                    continuationRetryCountRef.current >=
-                    MAX_CONTINUATION_RETRY_COUNT
-                ) {
-                    toast.error(
-                        formatMessage(dict.errors.continuationRetryLimit, {
-                            max: MAX_CONTINUATION_RETRY_COUNT,
-                        }),
-                    )
-                    continuationRetryCountRef.current = 0
-                    partialXmlRef.current = ""
-                    return false
-                }
-                continuationRetryCountRef.current++
-            } else {
-                // Regular error: check retry count limit
-                if (autoRetryCountRef.current >= MAX_AUTO_RETRY_COUNT) {
-                    toast.error(
-                        formatMessage(dict.errors.retryLimit, {
-                            max: MAX_AUTO_RETRY_COUNT,
-                        }),
-                    )
-                    autoRetryCountRef.current = 0
-                    partialXmlRef.current = ""
-                    return false
-                }
-                // Increment retry count for actual errors
-                autoRetryCountRef.current++
-            }
-
-            return true
-        },
     })
 
     useEffect(() => {
@@ -1117,11 +995,8 @@ export default function ChatPanel({
         previousXml: string,
         sessionId: string,
     ) => {
-        // Reset all retry/continuation state on user-initiated message
-        autoRetryCountRef.current = 0
-        continuationRetryCountRef.current = 0
+        // Reset VLM retry state on user-initiated message
         vlmRetryCountRef.current = 0
-        partialXmlRef.current = ""
 
         const config = getSelectedAIConfig(modelConfig.selectedModel)
 
@@ -1473,6 +1348,11 @@ export default function ChatPanel({
                     loadedMessageIdsRef={loadedMessageIdsRef}
                     validationStates={validationStates}
                     onImproveWithSuggestions={handleImproveWithSuggestions}
+                    captureValidationPng={captureValidationPng}
+                    validateDiagram={validateWithFallback}
+                    enableVlmValidation={vlmValidationEnabled}
+                    onValidationStateChange={handleValidationStateChange}
+                    onVlmValidationFailure={handleVlmValidationFailure}
                 />
             </main>
 

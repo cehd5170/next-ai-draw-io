@@ -520,21 +520,21 @@ function SettingsContent({
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="none">Off</SelectItem>
-                                <SelectItem value="auto">Auto</SelectItem>
-                                <SelectItem value="verticalflow">
-                                    Vertical Flow
+                                <SelectItem value="mxHierarchicalLayout">
+                                    Hierarchical
                                 </SelectItem>
-                                <SelectItem value="horizontalflow">
-                                    Horizontal Flow
+                                <SelectItem value="mxCompactTreeLayout">
+                                    Tree
                                 </SelectItem>
-                                <SelectItem value="verticaltree">
-                                    Vertical Tree
+                                <SelectItem value="mxFastOrganicLayout">
+                                    Organic
                                 </SelectItem>
-                                <SelectItem value="horizontaltree">
-                                    Horizontal Tree
+                                <SelectItem value="mxCircleLayout">
+                                    Circle
                                 </SelectItem>
-                                <SelectItem value="organic">Organic</SelectItem>
-                                <SelectItem value="circle">Circle</SelectItem>
+                                <SelectItem value="mxRadialTreeLayout">
+                                    Radial Tree
+                                </SelectItem>
                             </SelectContent>
                         </Select>
                     </SettingItem>

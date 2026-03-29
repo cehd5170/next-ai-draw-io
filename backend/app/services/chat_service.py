@@ -26,12 +26,10 @@ Typical event sequence for a tool-call response::
 
 Tool execution model
 --------------------
-* ``display_diagram``, ``edit_diagram``, ``append_diagram`` are **client-side**
-  tools.  The server emits ``tool-input-available`` and the frontend handles
-  execution (calling ``addToolOutput`` afterwards).
-* ``get_shape_library`` is a **server-side** tool.  The server executes it,
-  emits ``tool-output-available``, then feeds the result back to the LLM for
-  another generation round (multi-step).
+* ``display_diagram``, ``edit_diagram``, and ``append_diagram`` stream their
+  input to the frontend for preview, but execution now happens on the server.
+* ``get_shape_library`` is also executed on the server and its result is fed
+  back to the LLM for another generation round (multi-step).
 """
 
 from __future__ import annotations
@@ -72,10 +70,12 @@ def _init_tool_defs() -> None:
         _CACHED_TOOL_DEFS = get_tool_definitions()
 
 # ---------------------------------------------------------------------------
-# Client-side tools — the server only streams tool-input events; the frontend
-# is responsible for executing these tools and calling addToolOutput.
+# Diagram tools still stream their input to the frontend so the canvas can
+# preview partial XML / operations while the model is generating them.
+# Unlike the previous client-executed flow, the server now executes these
+# tools itself and returns structured output for the final result.
 # ---------------------------------------------------------------------------
-CLIENT_SIDE_TOOLS = {"display_diagram", "edit_diagram", "append_diagram"}
+STREAMED_INPUT_TOOLS = {"display_diagram", "edit_diagram", "append_diagram"}
 
 # ---------------------------------------------------------------------------
 # ID generation helpers (nanoid-style short random strings)
@@ -129,6 +129,21 @@ def _tool_input_available_event(
             "input": parsed_args,
         }
     )
+
+
+def _tool_output_payload(tool_name: str, result: ToolResult) -> Any:
+    """Return the UI-facing tool output payload for a completed tool."""
+    if tool_name not in STREAMED_INPUT_TOOLS:
+        return result.content
+
+    payload: dict[str, Any] = {
+        "message": result.content,
+        "success": result.success,
+        "isTruncated": result.is_truncated,
+    }
+    if result.xml is not None:
+        payload["xml"] = result.xml
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +674,7 @@ class ChatService:
                                 acc["pending_arguments_delta"] += arguments_delta
 
                             if (
-                                acc["name"] in CLIENT_SIDE_TOOLS
+                                acc["name"] in STREAMED_INPUT_TOOLS
                                 and not acc["input_started"]
                             ):
                                 yield _sse(
@@ -673,7 +688,7 @@ class ChatService:
                                 step_stats["tool_calls_started"] += 1
 
                             should_flush_delta = (
-                                acc["name"] in CLIENT_SIDE_TOOLS
+                                acc["name"] in STREAMED_INPUT_TOOLS
                                 and acc["input_started"]
                                 and acc["pending_arguments_delta"]
                                 and (
@@ -797,11 +812,10 @@ class ChatService:
             # ------------------------------------------------------------------
             # Emit tool events.
             #
-            # Client-side tools (display_diagram, edit_diagram, append_diagram)
-            # are NOT executed server-side.  The server only emits
-            # tool-input events so the frontend can render and execute them.
-            # Server-side tools are executed here and their output is fed
-            # back to the LLM for another generation round.
+            # Diagram tools stream partial input for frontend preview, but all
+            # tools are executed on the server. Only tools that need another
+            # model round (e.g. get_shape_library, truncated/error recovery)
+            # loop back into the LLM.
             # ------------------------------------------------------------------
             needs_another_round = False
 
@@ -812,7 +826,7 @@ class ChatService:
                 parsed_args = parsed_per_idx[idx]
 
                 if (
-                    tool_name in CLIENT_SIDE_TOOLS
+                    tool_name in STREAMED_INPUT_TOOLS
                     and acc["input_started"]
                     and acc["pending_arguments_delta"]
                 ):
@@ -830,56 +844,54 @@ class ChatService:
                     acc["pending_arguments_delta"] = ""
                     acc["has_emitted_delta"] = True
 
-                if tool_name in CLIENT_SIDE_TOOLS:
+                if tool_name in STREAMED_INPUT_TOOLS:
                     diagram_tool_emitted = True
-                    yield _tool_input_available_event(
-                        tool_call_id,
-                        tool_name,
-                        parsed_args,
-                    )
+                yield _tool_input_available_event(
+                    tool_call_id,
+                    tool_name,
+                    parsed_args,
+                )
 
-                else:
-                    # Server-side tool — emit finalized input, execute, then emit output.
-                    yield _tool_input_available_event(
-                        tool_call_id,
-                        tool_name,
-                        parsed_args,
-                    )
+                result = await self._execute_tool(
+                    name=tool_name,
+                    arguments=parsed_args,
+                    context=tool_context,
+                )
+                if tool_name == "get_shape_library" and result.success:
+                    shape_library_consulted = True
 
-                    result = await self._execute_tool(
-                        name=tool_name,
-                        arguments=parsed_args,
-                        context=tool_context,
-                    )
-                    if tool_name == "get_shape_library" and result.success:
-                        shape_library_consulted = True
+                needs_followup = (
+                    tool_name == "get_shape_library"
+                    or result.is_truncated
+                    or not result.success
+                )
+                needs_another_round = needs_another_round or needs_followup
 
-                    needs_another_round = True
-                    if result.success:
-                        yield _sse(
-                            {
-                                "type": "tool-output-available",
-                                "toolCallId": tool_call_id,
-                                "output": result.content,
-                            }
-                        )
-                    else:
-                        yield _sse(
-                            {
-                                "type": "tool-output-error",
-                                "toolCallId": tool_call_id,
-                                "errorText": result.content,
-                            }
-                        )
-
-                    messages.append(
+                if result.success and not result.is_truncated:
+                    yield _sse(
                         {
-                            "role": "tool",
-                            "tool_call_id": tool_call_id,
-                            "name": tool_name,
-                            "content": result.content,
+                            "type": "tool-output-available",
+                            "toolCallId": tool_call_id,
+                            "output": _tool_output_payload(tool_name, result),
                         }
                     )
+                else:
+                    yield _sse(
+                        {
+                            "type": "tool-output-error",
+                            "toolCallId": tool_call_id,
+                            "errorText": result.content,
+                        }
+                    )
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": result.content,
+                    }
+                )
 
             logger.info(
                 "[chat stream] request_id=%s step=%s finish_reason=%s text_chars=%s reasoning_chars=%s tool_calls_started=%s tool_delta_events=%s tool_delta_chars=%s tool_calls_total=%s",

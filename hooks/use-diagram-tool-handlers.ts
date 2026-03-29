@@ -50,7 +50,12 @@ interface UseDiagramToolHandlersParams {
     partialXmlRef: MutableRefObject<string>
     editDiagramOriginalXmlRef: MutableRefObject<Map<string, string>>
     chartXMLRef: MutableRefObject<string>
-    onDisplayChart: (xml: string, skipValidation?: boolean) => string | null
+    onDisplayChart: (
+        xml: string,
+        skipValidation?: boolean,
+        syncState?: boolean,
+        layout?: import("@/contexts/diagram-context").AutoLayoutType,
+    ) => string | null
     onFetchChart: (saveToHistory?: boolean) => Promise<string>
     onExport: () => void
     captureValidationPng?: () => Promise<string | null>
@@ -154,9 +159,10 @@ export function useDiagramToolHandlers({
         toolCall: ToolCall,
         addToolOutput: AddToolOutputFn,
     ) => {
-        const { xml, truncated } = toolCall.input as {
+        const { xml, truncated, layout } = toolCall.input as {
             xml: string
             truncated?: boolean
+            layout?: string
         }
 
         // DEBUG: Log raw input to diagnose false truncation detection
@@ -233,7 +239,12 @@ ${finalXml}
                 console.log("[display_diagram] Success! Displaying diagram.")
             }
 
-            onDisplayChart(prepared.xml, true)
+            onDisplayChart(
+                prepared.xml,
+                true,
+                true,
+                layout as import("@/contexts/diagram-context").AutoLayoutType,
+            )
             addToolOutput({
                 tool: "display_diagram",
                 toolCallId: toolCall.toolCallId,

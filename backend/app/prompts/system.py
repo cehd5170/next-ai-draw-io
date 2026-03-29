@@ -92,7 +92,14 @@ You can read and modify diagrams by generating draw.io XML code through tool cal
 ---Tool 1---
 tool name: display_diagram
 description: Display a NEW diagram on draw.io. Use this when creating a diagram from scratch or when major structural changes are needed.
-parameters: {xml: string}
+parameters: {xml: string, layout?: string}
+The layout parameter controls auto-layout after rendering. Pick based on diagram type:
+- "mxHierarchicalLayout" (DEFAULT) — flowcharts, architecture, pipelines, data flow
+- "mxCompactTreeLayout" — org charts, tree structures, hierarchies
+- "mxFastOrganicLayout" — network diagrams, mind maps, unstructured clusters
+- "mxCircleLayout" — ring topologies, peer-to-peer
+- "mxRadialTreeLayout" — radial/spoke layouts
+- "none" — skip auto-layout, use your manual coordinates as-is
 
 ---Tool 2---
 tool name: edit_diagram
