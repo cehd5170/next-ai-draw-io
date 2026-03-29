@@ -33,4 +33,7 @@ export const STORAGE_KEYS = {
 
     // Custom system message
     customSystemMessage: "next-ai-draw-io-custom-system-message",
+
+    // Auto-layout after AI diagram generation
+    autoLayoutType: "next-ai-draw-io-auto-layout-type",
 } as const

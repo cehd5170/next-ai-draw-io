@@ -6,11 +6,22 @@ import type { DrawIoEmbedRef } from "react-drawio"
 import { toast } from "sonner"
 import type { ExportFormat } from "@/components/save-dialog"
 import { getApiEndpoint } from "@/lib/base-path"
+import { STORAGE_KEYS } from "@/lib/storage"
 import {
     extractDiagramXML,
     isRealDiagram,
     validateAndFixXml,
 } from "../lib/utils"
+
+export type AutoLayoutType =
+    | "none"
+    | "auto"
+    | "verticalflow"
+    | "horizontalflow"
+    | "verticaltree"
+    | "horizontaltree"
+    | "organic"
+    | "circle"
 
 interface DiagramContextType {
     chartXML: string
@@ -41,6 +52,8 @@ interface DiagramContextType {
     resetDrawioReady: () => void
     showSaveDialog: boolean
     setShowSaveDialog: (show: boolean) => void
+    autoLayoutType: AutoLayoutType
+    setAutoLayoutType: (type: AutoLayoutType) => void
 }
 
 const DiagramContext = createContext<DiagramContextType | undefined>(undefined)
@@ -53,6 +66,9 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     >([])
     const [isDrawioReady, setIsDrawioReady] = useState(false)
     const [showSaveDialog, setShowSaveDialog] = useState(false)
+    const [autoLayoutType, setAutoLayoutTypeState] =
+        useState<AutoLayoutType>("none")
+    const autoLayoutTypeRef = useRef<AutoLayoutType>("none")
     const hasCalledOnLoadRef = useRef(false)
     const drawioRef = useRef<DrawIoEmbedRef | null>(null)
     const resolverRef = useRef<((value: string) => void) | null>(null)
@@ -75,6 +91,22 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
     const resetDrawioReady = () => {
         hasCalledOnLoadRef.current = false
         setIsDrawioReady(false)
+    }
+
+    // Load auto-layout preference from localStorage
+    useEffect(() => {
+        const stored = localStorage.getItem(STORAGE_KEYS.autoLayoutType)
+        if (stored) {
+            const val = stored as AutoLayoutType
+            setAutoLayoutTypeState(val)
+            autoLayoutTypeRef.current = val
+        }
+    }, [])
+
+    const setAutoLayoutType = (type: AutoLayoutType) => {
+        setAutoLayoutTypeState(type)
+        autoLayoutTypeRef.current = type
+        localStorage.setItem(STORAGE_KEYS.autoLayoutType, type)
     }
 
     // Keep chartXMLRef in sync with state for restoration after remount
@@ -226,6 +258,16 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             drawioRef.current.load({
                 xml: xmlToLoad,
             })
+
+            // Apply auto-layout after diagram loads (if enabled)
+            const layoutType = autoLayoutTypeRef.current
+            if (layoutType && layoutType !== "none") {
+                setTimeout(() => {
+                    if (drawioRef.current) {
+                        drawioRef.current.layout({ layouts: [layoutType] })
+                    }
+                }, 300)
+            }
         }
 
         return null
@@ -413,6 +455,8 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
                 resetDrawioReady,
                 showSaveDialog,
                 setShowSaveDialog,
+                autoLayoutType,
+                setAutoLayoutType,
             }}
         >
             {children}

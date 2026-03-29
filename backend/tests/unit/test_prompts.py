@@ -144,7 +144,7 @@ class TestGetSystemPrompt:
         """The prompt should explicitly discourage wall-of-text box diagrams."""
         prompt = get_system_prompt("gpt-4o")
         assert "generic rounded rectangles" in prompt
-        assert "prefer real library icons plus grouping containers" in prompt
+        assert "Prefer real library icons plus grouping containers" in prompt
 
     def test_prompt_includes_architecture_workflow(self):
         """Architecture requests should have an explicit workflow, not only style rules."""

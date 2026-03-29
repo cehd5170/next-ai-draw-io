@@ -86,7 +86,7 @@ CACHED_RESPONSES: list[dict] = [
     # Transformer architecture — alternate phrasing
     # ------------------------------------------------------------------
     {
-        "prompt": "transformer",
+        "prompt": "transformer diagram",
         "has_image": False,
         "response_xml": (
             '<mxCell id="title" value="Transformer Architecture" '
@@ -335,7 +335,7 @@ def find_cached_response(text: str, has_image: bool) -> str | None:
     if not text:
         return None
 
-    text_lower = text.lower()
+    text_lower = text.lower().strip()
 
     for entry in CACHED_RESPONSES:
         if entry["has_image"] != has_image:

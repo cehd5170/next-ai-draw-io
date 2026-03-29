@@ -890,24 +890,25 @@ class TestReasoningEffortWithTools:
     """Tests for reasoning_effort handling on Chat Completions path."""
 
     @pytest.mark.asyncio
-    async def test_reasoning_effort_dropped_when_tools_present_direct_openai(
+    async def test_reasoning_effort_auto_upgrades_to_responses_when_tools_present(
         self, settings_override, monkeypatch
     ):
-        """reasoning_effort is NOT passed when hitting OpenAI directly (no base_url) with tools."""
+        """Direct OpenAI + reasoning model + tools + reasoning_effort auto-upgrades to Responses API."""
         settings_override.OPENAI_API_MODE = "completions"
         service = ChatService(settings_override)
 
-        async def _fake_stream():
+        async def _fake_responses_stream():
+            yield SimpleNamespace(type="response.output_text.delta", delta="ok", item_id="item_1", output_index=0, content_index=0, sequence_number=1)
             yield SimpleNamespace(
-                choices=[SimpleNamespace(
-                    delta=SimpleNamespace(content="ok", reasoning_content=None, tool_calls=None),
-                    finish_reason="stop",
-                )],
-                usage=SimpleNamespace(prompt_tokens=5, completion_tokens=2, total_tokens=7),
+                type="response.completed",
+                response=SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=5, output_tokens=2),
+                    output=[],
+                ),
             )
 
         _FakeAsyncOpenAI.instances.clear()
-        _FakeAsyncOpenAI.stream_factory = _fake_stream
+        _FakeAsyncOpenAI.responses_stream_factory = _fake_responses_stream
         monkeypatch.setattr("app.services.chat_service.AsyncOpenAI", _FakeAsyncOpenAI)
 
         _ = [
@@ -922,9 +923,10 @@ class TestReasoningEffortWithTools:
             )
         ]
 
-        # Direct OpenAI + tools → reasoning_effort should be dropped
-        call_kwargs = _FakeAsyncOpenAI.instances[0].calls[0]
-        assert "reasoning_effort" not in call_kwargs
+        # Direct OpenAI + reasoning + tools → auto-upgrades to Responses API
+        assert len(_FakeAsyncOpenAI.instances[0].responses_calls) == 1
+        call_kwargs = _FakeAsyncOpenAI.instances[0].responses_calls[0]
+        assert call_kwargs["reasoning"] == {"effort": "high", "summary": "auto"}
 
     @pytest.mark.asyncio
     async def test_reasoning_effort_kept_when_proxy_with_tools(

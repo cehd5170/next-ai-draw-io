@@ -14,8 +14,8 @@ Evaluate for:
 
 Rules:
 - Set "valid" to true ONLY if there are no critical issues
-- Be specific about which elements have problems
-- Provide actionable suggestions
+- **Name the specific elements involved** — use the visible label text (e.g., "the box labeled 'Auth Service' overlaps with 'Database'"), not generic descriptions like "two shapes overlap"
+- Provide **actionable suggestions** that tell the diagram generator exactly what to change (e.g., "move 'Auth Service' below 'API Gateway' to eliminate overlap", "increase spacing between 'User' and 'Admin' nodes")
 - Minor cosmetic issues should be warnings, not critical
 - Empty or 1-2 element diagrams should pass unless obvious errors exist
 - If diagram looks generally acceptable, set valid to true even with minor warnings"""

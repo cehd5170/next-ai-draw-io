@@ -61,6 +61,8 @@ interface UseDiagramToolHandlersParams {
         toolCallId: string,
         state: ValidationState,
     ) => void
+    /** Called when VLM validation fails — injects feedback as a user message to trigger retry without blocking the tool output. */
+    onVlmValidationFailure?: (feedback: string) => void
 }
 
 /**
@@ -82,6 +84,7 @@ export function useDiagramToolHandlers({
     enableVlmValidation = true,
     sessionId,
     onValidationStateChange,
+    onVlmValidationFailure,
 }: UseDiagramToolHandlersParams) {
     const withTimeout = async <T>(
         promise: Promise<T>,
@@ -227,9 +230,7 @@ ${finalXml}
         } else {
             // Success - diagram will be rendered by chat-message-display
             if (DEBUG) {
-                console.log(
-                    "[display_diagram] Success! Returning tool output immediately.",
-                )
+                console.log("[display_diagram] Success! Displaying diagram.")
             }
 
             onDisplayChart(prepared.xml, true)
@@ -240,11 +241,14 @@ ${finalXml}
             })
 
             // VLM validation runs in the background so the tool round-trip
-            // does not stall the chat UI after the diagram is already visible.
+            // does not stall the chat UI. On failure, onVlmValidationFailure
+            // injects a user message to trigger the LLM to fix the diagram.
+            // This keeps VLM retries on a separate budget from XML error retries.
             if (
                 enableVlmValidation &&
                 captureValidationPng &&
-                validateDiagram
+                validateDiagram &&
+                onVlmValidationFailure
             ) {
                 void (async () => {
                     let capturedPngData: string | null = null
@@ -268,7 +272,7 @@ ${finalXml}
 
                         if (DEBUG) {
                             console.log(
-                                "[display_diagram] Captured PNG for background validation",
+                                "[display_diagram] Captured PNG for validation",
                             )
                         }
 
@@ -289,10 +293,11 @@ ${finalXml}
                         )
 
                         if (!result.valid) {
+                            const feedback = formatValidationFeedback(result)
                             if (DEBUG) {
                                 console.log(
-                                    "[display_diagram] Background validation found issues:",
-                                    formatValidationFeedback(result),
+                                    "[display_diagram] Validation failed, injecting feedback:",
+                                    feedback,
                                 )
                             }
                             updateValidationState(
@@ -305,6 +310,10 @@ ${finalXml}
                                     imageData: capturedPngData,
                                 },
                             )
+                            // Inject feedback as a user message to trigger
+                            // the LLM to regenerate without blocking the chat
+                            // or consuming the XML error retry budget.
+                            onVlmValidationFailure(feedback)
                             return
                         }
 

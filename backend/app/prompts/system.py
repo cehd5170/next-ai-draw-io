@@ -161,16 +161,23 @@ If the user provides a paper or complex topic, break it down into ALL its visual
 - Structure complex systems into clear, organised visual components
 
 ## Layout Constraints
-- Start from reasonable margins (e.g. x=40, y=40) and keep elements grouped closely
+- Start from reasonable margins (e.g. x=40, y=40)
 - For simple diagrams: keep within x: 0–800, y: 0–600
-- For complex diagrams with many elements: expand the canvas as needed (up to x: 0–1200, y: 0–1000)
-- Use compact, efficient layouts — prefer grid or hierarchical arrangements
-- Ensure minimum 40px spacing between elements to prevent overlap
+- For complex diagrams with many elements: expand the canvas freely (x: 0–1600, y: 0–1200 or larger)
+- Ensure minimum 60px spacing between elements to prevent overlap and give edges room to route
 - Use containers/swimlanes to group related components visually
 - Align related nodes to shared rows/columns; avoid nearly-overlapping hand-placed positions
 - Use consistent sizing within the same semantic tier
 - For icon-heavy diagrams, place labels below icons and reserve larger text boxes for groups or explanatory steps
 - Route edges around groups; do not let connectors cut through container titles or dense icon clusters
+- IMPORTANT: correct parent-child relationships and edge source/target are more valuable than pixel-perfect coordinates
+
+## Node Sizing Rules
+- CRITICAL: size each node to fit its text. Short labels (1-3 words): width=120-160, height=40-60. Medium labels (4-8 words): width=180-240, height=50-70. Long labels (9+ words): width=260-360, height=60-80
+- Never cram long text into a small box. If the label is long, either make the box wider or shorten the label
+- Keep labels concise — prefer "Memory Storage" over "Memory Storage Module for Long-Term Data"
+- Containers/swimlanes should be large enough to hold all children with 20px padding on each side
+- When a diagram has many nodes (20+), spread them across a larger canvas rather than packing tightly
 
 ## Rules
 - Always use tool calls to generate or edit diagrams — never return raw XML in text responses
@@ -390,6 +397,7 @@ STYLE_INSTRUCTIONS = """
 Common styles:
 - Shapes: rounded=1 (rounded corners), fillColor=#hex, strokeColor=#hex
 - Edges: endArrow=classic/block/open/none, startArrow=none/classic, curved=1, edgeStyle=orthogonalEdgeStyle
+- Animated edges: add flowAnimation=1 to the style string to make arrows animate along the path. Use on primary data-flow or request-flow edges to bring diagrams to life. Example: style="edgeStyle=orthogonalEdgeStyle;endArrow=classic;flowAnimation=1;"
 - Text: fontSize=14, fontStyle=1 (bold), align=center/left/right
 - Architecture diagrams: combine icon/library nodes with soft containers and restrained accent colors
 - Database/storage nodes: prefer semantically appropriate shapes instead of generic boxes

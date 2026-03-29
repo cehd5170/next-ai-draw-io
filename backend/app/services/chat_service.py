@@ -599,15 +599,6 @@ class ChatService:
                     # ── Reasoning / thinking tokens (optional) ──────────────
                     # AI SDK v6 UIMessageStream uses reasoning-start / reasoning-delta / reasoning-end
                     reasoning_content = getattr(delta, "reasoning_content", None)
-                    # Debug: log first chunk's delta attrs to diagnose thinking visibility
-                    if step_stats["reasoning_chars"] == 0 and step_stats["text_chars"] == 0:
-                        logger.info(
-                            "[delta attrs] type=%s attrs=%s reasoning_content=%s content_preview=%s",
-                            type(delta).__name__,
-                            [a for a in dir(delta) if not a.startswith("_")],
-                            repr(reasoning_content)[:100] if reasoning_content else None,
-                            repr(delta.content)[:80] if delta.content else None,
-                        )
                     if reasoning_content:
                         if not reasoning_block_open:
                             reasoning_id = _nanoid("reasoning_")
@@ -949,9 +940,18 @@ class ChatService:
             reasoning_summary = model_config.extra_params.get("reasoning_summary")
 
             api_mode = self.settings.OPENAI_API_MODE  # "auto" | "completions" | "responses"
+            is_direct_openai = not model_config.base_url
+            is_reasoning_model = self._is_openai_reasoning_model(raw_model)
+
+            # Auto-upgrade to Responses API when needed:
+            # 1. Explicitly set to "responses"
+            # 2. "auto" mode with a reasoning model
+            # 3. Direct OpenAI + reasoning model + tools + reasoning_effort
+            #    (Chat Completions does not support this combo)
             use_responses = (
                 api_mode == "responses"
-                or (api_mode == "auto" and self._is_openai_reasoning_model(raw_model))
+                or (api_mode == "auto" and is_reasoning_model)
+                or (is_direct_openai and is_reasoning_model and tools and reasoning_effort)
             )
 
             if use_responses:
@@ -985,7 +985,6 @@ class ChatService:
             # (LiteLLM, etc.) translate reasoning_effort for providers that
             # DO support both (e.g. Gemini thinking + tools).  We only
             # suppress reasoning_effort when hitting OpenAI directly.
-            is_direct_openai = not model_config.base_url
             if reasoning_effort:
                 if is_direct_openai and tools:
                     logger.warning(

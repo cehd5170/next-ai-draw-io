@@ -73,6 +73,10 @@ interface SettingsDialogProps {
     onVlmValidationChange?: (value: boolean) => void
     pdfInputMode?: "text" | "base64"
     onPdfInputModeChange?: (value: "text" | "base64") => void
+    autoLayoutType?: import("@/contexts/diagram-context").AutoLayoutType
+    onAutoLayoutTypeChange?: (
+        value: import("@/contexts/diagram-context").AutoLayoutType,
+    ) => void
     onOpenModelConfig?: () => void
     customSystemMessage?: string
     onCustomSystemMessageChange?: (value: string) => void
@@ -101,6 +105,8 @@ function SettingsContent({
     onVlmValidationChange = () => {},
     pdfInputMode = "text",
     onPdfInputModeChange = () => {},
+    autoLayoutType = "none",
+    onAutoLayoutTypeChange = () => {},
     onOpenModelConfig,
     customSystemMessage = "",
     onCustomSystemMessageChange = () => {},
@@ -489,6 +495,46 @@ function SettingsContent({
                                 <SelectItem value="base64">
                                     Send Base64
                                 </SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </SettingItem>
+
+                    {/* Auto Layout */}
+                    <SettingItem
+                        label="Auto Layout"
+                        description="Automatically apply a layout algorithm after AI generates a diagram. Improves line routing and spacing."
+                    >
+                        <Select
+                            value={autoLayoutType}
+                            onValueChange={(v) =>
+                                onAutoLayoutTypeChange(
+                                    v as import("@/contexts/diagram-context").AutoLayoutType,
+                                )
+                            }
+                        >
+                            <SelectTrigger
+                                id="auto-layout-select"
+                                className="w-[160px] h-9 rounded-xl"
+                            >
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="none">Off</SelectItem>
+                                <SelectItem value="auto">Auto</SelectItem>
+                                <SelectItem value="verticalflow">
+                                    Vertical Flow
+                                </SelectItem>
+                                <SelectItem value="horizontalflow">
+                                    Horizontal Flow
+                                </SelectItem>
+                                <SelectItem value="verticaltree">
+                                    Vertical Tree
+                                </SelectItem>
+                                <SelectItem value="horizontaltree">
+                                    Horizontal Tree
+                                </SelectItem>
+                                <SelectItem value="organic">Organic</SelectItem>
+                                <SelectItem value="circle">Circle</SelectItem>
                             </SelectContent>
                         </Select>
                     </SettingItem>

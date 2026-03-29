@@ -78,8 +78,8 @@ interface ChatPanelProps {
 // Constants for tool states
 const TOOL_ERROR_STATE = "output-error" as const
 const DEBUG = process.env.NODE_ENV === "development"
-// Increased to 3 to support VLM validation retries (matches MAX_VALIDATION_RETRIES)
 const MAX_AUTO_RETRY_COUNT = 3
+const MAX_VLM_RETRY_COUNT = 2 // Independent budget for VLM validation retries
 
 const MAX_CONTINUATION_RETRY_COUNT = 2 // Limit for truncation continuation retries
 
@@ -136,6 +136,8 @@ export default function ChatPanel({
         captureValidationPng,
         diagramHistory,
         setDiagramHistory,
+        autoLayoutType,
+        setAutoLayoutType,
     } = useDiagram()
 
     const dict = useDictionary()
@@ -297,6 +299,8 @@ export default function ChatPanel({
     const autoRetryCountRef = useRef(0)
     // Ref to track continuation retry count (for truncation handling)
     const continuationRetryCountRef = useRef(0)
+    // Ref to track VLM validation retry count (independent from XML error retries)
+    const vlmRetryCountRef = useRef(0)
 
     // Ref to accumulate partial XML when output is truncated due to maxOutputTokens
     // When partialXmlRef.current.length > 0, we're in continuation mode
@@ -363,6 +367,27 @@ export default function ChatPanel({
         }
     }, [])
 
+    // Callback for VLM validation failure — injects feedback as a user
+    // message on a separate retry budget from XML parse errors.
+    const handleVlmValidationFailure = useCallback((feedback: string) => {
+        if (vlmRetryCountRef.current >= MAX_VLM_RETRY_COUNT) {
+            if (DEBUG) {
+                console.log(
+                    "[VLM] Retry limit reached, skipping feedback injection",
+                )
+            }
+            vlmRetryCountRef.current = 0
+            return
+        }
+        vlmRetryCountRef.current++
+        if (sendMessageRef.current) {
+            sendMessageRef.current({
+                role: "user",
+                parts: [{ type: "text", text: feedback }],
+            })
+        }
+    }, [])
+
     // VLM validation hook using AI SDK's useObject
     const { validateWithFallback } = useValidateDiagram()
 
@@ -379,6 +404,7 @@ export default function ChatPanel({
         enableVlmValidation: vlmValidationEnabled,
         sessionId,
         onValidationStateChange: handleValidationStateChange,
+        onVlmValidationFailure: handleVlmValidationFailure,
     })
 
     const {
@@ -492,6 +518,7 @@ export default function ChatPanel({
                 // No error, reset retry count and clear state
                 autoRetryCountRef.current = 0
                 continuationRetryCountRef.current = 0
+                vlmRetryCountRef.current = 0
                 partialXmlRef.current = ""
                 return false
             }
@@ -1093,6 +1120,7 @@ export default function ChatPanel({
         // Reset all retry/continuation state on user-initiated message
         autoRetryCountRef.current = 0
         continuationRetryCountRef.current = 0
+        vlmRetryCountRef.current = 0
         partialXmlRef.current = ""
 
         const config = getSelectedAIConfig(modelConfig.selectedModel)
@@ -1503,6 +1531,8 @@ export default function ChatPanel({
                 onPdfInputModeChange={handlePdfInputModeChange}
                 customSystemMessage={customSystemMessage}
                 onCustomSystemMessageChange={handleCustomSystemMessageChange}
+                autoLayoutType={autoLayoutType}
+                onAutoLayoutTypeChange={setAutoLayoutType}
                 onOpenModelConfig={() => setShowModelConfigDialog(true)}
             />
 
