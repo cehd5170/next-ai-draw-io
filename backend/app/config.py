@@ -211,6 +211,15 @@ class Settings(BaseSettings):
     )
     OPENAI_ORGANIZATION: Optional[str] = Field(default=None)
     OPENAI_PROJECT: Optional[str] = Field(default=None)
+    OPENAI_API_MODE: Literal["auto", "completions", "responses"] = Field(
+        default="auto",
+        description=(
+            "Which OpenAI API to use: "
+            "'auto' = Responses API for reasoning models, Chat Completions for others; "
+            "'completions' = always Chat Completions; "
+            "'responses' = always Responses API"
+        ),
+    )
     OPENAI_REASONING_EFFORT: Optional[str] = Field(
         default=None,
         description="Reasoning effort for o1/o3 models (minimal/low/medium/high)",

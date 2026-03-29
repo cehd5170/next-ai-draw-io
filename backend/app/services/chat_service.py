@@ -188,9 +188,17 @@ class _ResponsesStreamAdapter:
 
     def __init__(self, stream: Any) -> None:
         self._stream = stream
-        # Track tool call indices by item_id
+        # Track tool call indices by item_id (and call_id aliases)
         self._tool_indices: dict[str, int] = {}
+        self._tool_call_ids: dict[str, str] = {}  # item_id → call_id
         self._next_tool_idx = 0
+
+    def _ensure_tool_index(self, item_id: str) -> int:
+        """Register an item_id in the tool index map, returning its index."""
+        if item_id and item_id not in self._tool_indices:
+            self._tool_indices[item_id] = self._next_tool_idx
+            self._next_tool_idx += 1
+        return self._tool_indices.get(item_id, 0)
 
     def __aiter__(self):
         return self._iterate()
@@ -198,11 +206,32 @@ class _ResponsesStreamAdapter:
     async def _iterate(self) -> AsyncGenerator[_FakeChunk, None]:
         async for event in self._stream:
             event_type = getattr(event, "type", "")
+            if event_type not in (
+                "response.function_call_arguments.delta",
+                "response.reasoning.delta",
+                "response.reasoning_summary_text.delta",
+                "response.output_text.delta",
+            ):
+                logger.debug("[Responses API event] type=%s data=%s", event_type, repr(event)[:300])
 
-            # ── Reasoning summary text (visible reasoning) ───────────
+            # ── Reasoning (all reasoning-related events) ────────────
             if event_type == "response.reasoning_summary_text.delta":
                 delta = _FakeDelta(reasoning_content=event.delta)
                 yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
+
+            elif event_type == "response.reasoning.delta":
+                # Raw reasoning delta — may be a string or structured object
+                raw = event.delta
+                text = None
+                if isinstance(raw, str):
+                    text = raw
+                elif isinstance(raw, dict):
+                    text = raw.get("text") or raw.get("content")
+                elif hasattr(raw, "text"):
+                    text = raw.text
+                if text:
+                    delta = _FakeDelta(reasoning_content=text)
+                    yield _FakeChunk(choices=[_FakeChoice(delta=delta)])
 
             # ── Text delta ───────────────────────────────────────────
             elif event_type == "response.output_text.delta":
@@ -212,10 +241,7 @@ class _ResponsesStreamAdapter:
             # ── Function call arguments delta ────────────────────────
             elif event_type == "response.function_call_arguments.delta":
                 item_id = getattr(event, "item_id", "")
-                if item_id not in self._tool_indices:
-                    self._tool_indices[item_id] = self._next_tool_idx
-                    self._next_tool_idx += 1
-                idx = self._tool_indices[item_id]
+                idx = self._ensure_tool_index(item_id)
                 tc = _FakeToolCall(
                     index=idx,
                     function=_FakeFunction(arguments=event.delta),
@@ -226,13 +252,12 @@ class _ResponsesStreamAdapter:
             # ── Function call done — emit tool name + call_id ────────
             elif event_type == "response.function_call_arguments.done":
                 item_id = getattr(event, "item_id", "")
-                if item_id not in self._tool_indices:
-                    self._tool_indices[item_id] = self._next_tool_idx
-                    self._next_tool_idx += 1
-                idx = self._tool_indices[item_id]
+                idx = self._ensure_tool_index(item_id)
+                # Use the call_id registered by .added, falling back to item_id
+                call_id = self._tool_call_ids.get(item_id, item_id) or _nanoid("call_")
                 tc = _FakeToolCall(
                     index=idx,
-                    id=getattr(event, "item_id", "") or _nanoid("call_"),
+                    id=call_id,
                     function=_FakeFunction(
                         name=getattr(event, "name", ""),
                     ),
@@ -244,13 +269,15 @@ class _ResponsesStreamAdapter:
             elif event_type == "response.output_item.added":
                 item = getattr(event, "item", None)
                 if item and getattr(item, "type", "") == "function_call":
-                    item_id = getattr(item, "id", "") or getattr(item, "call_id", "")
-                    if item_id not in self._tool_indices:
-                        self._tool_indices[item_id] = self._next_tool_idx
-                        self._next_tool_idx += 1
-                    idx = self._tool_indices[item_id]
+                    # Use item.id as key — this matches event.item_id in subsequent events
+                    item_id = getattr(item, "id", "")
                     call_id = getattr(item, "call_id", "") or item_id
                     fn_name = getattr(item, "name", "")
+                    idx = self._ensure_tool_index(item_id)
+                    # Map call_id → same index and store the call_id for later lookup
+                    self._tool_call_ids[item_id] = call_id
+                    if call_id and call_id != item_id and call_id not in self._tool_indices:
+                        self._tool_indices[call_id] = self._tool_indices.get(item_id, 0)
                     tc = _FakeToolCall(
                         index=idx,
                         id=call_id,
@@ -572,6 +599,15 @@ class ChatService:
                     # ── Reasoning / thinking tokens (optional) ──────────────
                     # AI SDK v6 UIMessageStream uses reasoning-start / reasoning-delta / reasoning-end
                     reasoning_content = getattr(delta, "reasoning_content", None)
+                    # Debug: log first chunk's delta attrs to diagnose thinking visibility
+                    if step_stats["reasoning_chars"] == 0 and step_stats["text_chars"] == 0:
+                        logger.info(
+                            "[delta attrs] type=%s attrs=%s reasoning_content=%s content_preview=%s",
+                            type(delta).__name__,
+                            [a for a in dir(delta) if not a.startswith("_")],
+                            repr(reasoning_content)[:100] if reasoning_content else None,
+                            repr(delta.content)[:80] if delta.content else None,
+                        )
                     if reasoning_content:
                         if not reasoning_block_open:
                             reasoning_id = _nanoid("reasoning_")
@@ -600,7 +636,15 @@ class ChatService:
                         step_stats["text_chars"] += len(delta.content)
 
                     # ── Tool-call deltas ─────────────────────────────────────
+                    # Close reasoning/text blocks before tool events start
+                    # (AI SDK expects reasoning-end before tool-input-start)
                     if delta.tool_calls:
+                        if reasoning_block_open and reasoning_id:
+                            yield _sse({"type": "reasoning-end", "id": reasoning_id})
+                            reasoning_block_open = False
+                        if text_block_open and text_id:
+                            yield _sse({"type": "text-end", "id": text_id})
+                            text_block_open = False
                         for tc in delta.tool_calls:
                             idx = tc.index if hasattr(tc, "index") else 0
                             if idx not in tool_calls_acc:
@@ -904,8 +948,13 @@ class ChatService:
             reasoning_effort = model_config.extra_params.get("reasoning_effort")
             reasoning_summary = model_config.extra_params.get("reasoning_summary")
 
-            # Use Responses API for reasoning models (supports reasoning + tools)
-            if self._is_openai_reasoning_model(raw_model):
+            api_mode = self.settings.OPENAI_API_MODE  # "auto" | "completions" | "responses"
+            use_responses = (
+                api_mode == "responses"
+                or (api_mode == "auto" and self._is_openai_reasoning_model(raw_model))
+            )
+
+            if use_responses:
                 return self._create_openai_responses_stream(
                     client=client,
                     model=raw_model,
@@ -916,7 +965,7 @@ class ChatService:
                     reasoning_summary=reasoning_summary,
                 )
 
-            # Non-reasoning models: use Chat Completions API
+            # Chat Completions API
             call_kwargs: dict[str, Any] = {
                 "model": raw_model,
                 "messages": messages,
@@ -924,11 +973,28 @@ class ChatService:
                 "stream_options": {"include_usage": True},
                 "tools": tools,
                 "tool_choice": tool_choice,
-                "max_tokens": self.settings.MAX_OUTPUT_TOKENS,
             }
+            call_kwargs.update(
+                self._openai_token_limit_kwargs(raw_model, self.settings.MAX_OUTPUT_TOKENS)
+            )
 
             if self.settings.TEMPERATURE is not None:
                 call_kwargs["temperature"] = self.settings.TEMPERATURE
+            # OpenAI's native Chat Completions API does not support
+            # reasoning_effort + tools together.  However, proxy endpoints
+            # (LiteLLM, etc.) translate reasoning_effort for providers that
+            # DO support both (e.g. Gemini thinking + tools).  We only
+            # suppress reasoning_effort when hitting OpenAI directly.
+            is_direct_openai = not model_config.base_url
+            if reasoning_effort:
+                if is_direct_openai and tools:
+                    logger.warning(
+                        "reasoning_effort=%s ignored: OpenAI Chat Completions API does not "
+                        "support reasoning_effort with tools. Use OPENAI_API_MODE=responses.",
+                        reasoning_effort,
+                    )
+                else:
+                    call_kwargs["reasoning_effort"] = reasoning_effort
 
             return client.chat.completions.create(**call_kwargs)
 
