@@ -80,8 +80,6 @@ type ValidateDiagramFn = (
     sessionId?: string,
 ) => Promise<ValidationResult>
 
-const DEFAULT_AI_DISPLAY_LAYOUT = "mxHierarchicalLayout"
-
 // Helper to split text content into regular text and file/URL sections (PDF, text files, or URLs)
 interface TextSection {
     type: "text" | "file" | "url"
@@ -651,14 +649,6 @@ export function ChatMessageDisplay({
                                 toolPart.output !== null
                                     ? (toolPart.output as DiagramToolOutput)
                                     : null
-                            const layout =
-                                typeof output?.layout === "string" &&
-                                output.layout.trim().length > 0
-                                    ? output.layout
-                                    : typeof input?.layout === "string" &&
-                                        input.layout.trim().length > 0
-                                      ? input.layout
-                                      : DEFAULT_AI_DISPLAY_LAYOUT
                             const finalXml =
                                 typeof output?.xml === "string"
                                     ? output.xml
@@ -711,7 +701,7 @@ export function ChatMessageDisplay({
                                     pendingXmlRef.current = null
                                 }
                                 // Show toast only if final XML is malformed
-                                handleDisplayChart(finalXml, true, layout)
+                                handleDisplayChart(finalXml, true)
                                 processedToolCalls.current.add(toolCallId)
                                 if (!isRestoredToolMessage) {
                                     runDiagramValidation(toolCallId)
@@ -867,12 +857,7 @@ export function ChatMessageDisplay({
                                     : null
 
                             if (typeof output?.xml === "string") {
-                                const layout =
-                                    typeof output.layout === "string" &&
-                                    output.layout.trim().length > 0
-                                        ? output.layout
-                                        : DEFAULT_AI_DISPLAY_LAYOUT
-                                handleDisplayChart(output.xml, true, layout)
+                                handleDisplayChart(output.xml, true)
                                 processedToolCalls.current.add(toolCallId)
                                 if (!isRestoredToolMessage) {
                                     runDiagramValidation(toolCallId)

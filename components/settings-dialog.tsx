@@ -530,46 +530,6 @@ function SettingsContent({
                         </Select>
                     </SettingItem>
 
-                    {/* Auto Layout */}
-                    <SettingItem
-                        label="Auto Layout"
-                        description="Automatically apply a layout algorithm after AI generates a diagram. Improves line routing and spacing."
-                    >
-                        <Select
-                            value={autoLayoutType}
-                            onValueChange={(v) =>
-                                onAutoLayoutTypeChange(
-                                    v as import("@/contexts/diagram-context").AutoLayoutType,
-                                )
-                            }
-                        >
-                            <SelectTrigger
-                                id="auto-layout-select"
-                                className="w-[160px] h-9 rounded-xl"
-                            >
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="none">Off</SelectItem>
-                                <SelectItem value="mxHierarchicalLayout">
-                                    Hierarchical
-                                </SelectItem>
-                                <SelectItem value="mxCompactTreeLayout">
-                                    Tree
-                                </SelectItem>
-                                <SelectItem value="mxFastOrganicLayout">
-                                    Organic
-                                </SelectItem>
-                                <SelectItem value="mxCircleLayout">
-                                    Circle
-                                </SelectItem>
-                                <SelectItem value="mxRadialTreeLayout">
-                                    Radial Tree
-                                </SelectItem>
-                            </SelectContent>
-                        </Select>
-                    </SettingItem>
-
                     {/* Custom System Message */}
                     <div className="py-4 space-y-3">
                         <div className="space-y-0.5">

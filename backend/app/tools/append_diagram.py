@@ -23,7 +23,6 @@ from app.tools._xml_utils import (
     is_mxcell_xml_complete,
 )
 from app.prompts.constants import TOOL_SCHEMAS
-from app.tools.layout_policy import normalize_wrapped_xml_for_auto_layout
 
 
 # ── Execution ─────────────────────────────────────────────────────────────────
@@ -76,15 +75,12 @@ async def execute_append_diagram(params: dict, context: ToolContext) -> ToolResu
                 ),
             )
 
-        layout = context.display_layout
         full_xml = add_mxgraph_wrapper(combined)
-        full_xml = normalize_wrapped_xml_for_auto_layout(full_xml, layout)
         return ToolResult(
             success=True,
             content="Diagram completed and displayed successfully.",
             xml=full_xml,
             is_truncated=False,
-            layout=layout,
         )
 
     # 6. Still incomplete — signal for another append_diagram call.
@@ -96,7 +92,6 @@ async def execute_append_diagram(params: dict, context: ToolContext) -> ToolResu
         ),
         xml=combined,   # raw partial stored in context for the next call
         is_truncated=True,
-        layout=context.display_layout,
     )
 
 

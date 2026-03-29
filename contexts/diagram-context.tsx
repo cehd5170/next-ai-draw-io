@@ -292,18 +292,6 @@ export function DiagramProvider({ children }: { children: React.ReactNode }) {
             drawioRef.current.load({
                 xml: xmlToLoad,
             })
-
-            // Apply auto-layout: use layout from tool call, fall back to global setting
-            const layoutType = layout || autoLayoutTypeRef.current
-            if (layoutType && layoutType !== "none") {
-                setTimeout(() => {
-                    if (drawioRef.current) {
-                        drawioRef.current.layout({
-                            layouts: buildDrawioLayoutSequence(layoutType),
-                        })
-                    }
-                }, 500)
-            }
         }
 
         return null

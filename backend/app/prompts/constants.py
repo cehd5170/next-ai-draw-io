@@ -69,26 +69,6 @@ TOOL_SCHEMAS: dict[str, dict] = {
                         "types over generic text-only boxes."
                     ),
                 },
-                "layout": {
-                    "type": "string",
-                    "enum": [
-                        "none",
-                        "mxHierarchicalLayout",
-                        "mxFastOrganicLayout",
-                        "mxCircleLayout",
-                        "mxCompactTreeLayout",
-                        "mxRadialTreeLayout",
-                    ],
-                    "description": (
-                        "Auto-layout algorithm to apply after rendering. Choose based on diagram type: "
-                        "mxHierarchicalLayout for flowcharts/architecture/pipelines (DEFAULT — use this unless another fits better), "
-                        "mxCompactTreeLayout for org charts/tree structures/hierarchies, "
-                        "mxFastOrganicLayout for network diagrams/mind maps/unstructured clusters, "
-                        "mxCircleLayout for peer-to-peer/ring topologies, "
-                        "mxRadialTreeLayout for radial/spoke diagrams, "
-                        "none to skip auto-layout when you are confident the manual coordinates are correct."
-                    ),
-                },
             },
             "required": ["xml"],
             "additionalProperties": False,

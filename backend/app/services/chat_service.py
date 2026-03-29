@@ -144,8 +144,6 @@ def _tool_output_payload(tool_name: str, result: ToolResult) -> Any:
     }
     if result.xml is not None:
         payload["xml"] = result.xml
-    if result.layout is not None:
-        payload["layout"] = result.layout
     return payload
 
 
@@ -1341,8 +1339,6 @@ class ChatService:
             result = await dispatch_tool(name, arguments, context)
             if result.xml is not None:
                 context.current_xml = result.xml
-            if result.layout is not None:
-                context.display_layout = result.layout
             return result
         except Exception as exc:  # noqa: BLE001
             logger.error("Tool '%s' raised an exception: %s", name, exc, exc_info=True)

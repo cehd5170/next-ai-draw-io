@@ -105,7 +105,8 @@ class TestDisplayDiagram:
         assert 'id="1"' in result.xml, "Wrapped XML should contain root cell id=1"
 
     @pytest.mark.asyncio
-    async def test_auto_layout_normalizes_edge_routing_hints(self):
+    async def test_display_preserves_edge_routing_hints(self):
+        """Without auto layout, edge routing hints are preserved as-is."""
         xml = """
 <mxCell id="2" value="A" vertex="1" parent="1"><mxGeometry x="40" y="40" width="120" height="60" as="geometry"/></mxCell>
 <mxCell id="3" value="B" vertex="1" parent="1"><mxGeometry x="280" y="40" width="120" height="60" as="geometry"/></mxCell>
@@ -120,14 +121,9 @@ class TestDisplayDiagram:
         ctx = _ctx()
         result = await dispatch_tool("display_diagram", {"xml": xml}, ctx)
         assert result.success is True
-        assert result.layout == "mxHierarchicalLayout"
-        assert "edgeStyle=orthogonalEdgeStyle" in result.xml
-        assert "jettySize=auto" in result.xml
-        assert "entryX=" not in result.xml
-        assert "exitX=" not in result.xml
-        assert "sourcePoint" not in result.xml
-        assert "targetPoint" not in result.xml
-        assert "<Array as=\"points\">" not in result.xml
+        assert result.layout is None
+        assert "exitX=1" in result.xml
+        assert "entryX=0" in result.xml
 
 
 # ---------------------------------------------------------------------------

@@ -21,11 +21,6 @@ from app.tools._xml_utils import (
     strip_wrapper_tags,
 )
 from app.prompts.constants import TOOL_SCHEMAS
-from app.tools.layout_policy import (
-    DEFAULT_DISPLAY_DIAGRAM_LAYOUT,
-    SUPPORTED_AUTO_LAYOUTS,
-    normalize_wrapped_xml_for_auto_layout,
-)
 
 
 # ── Execution ─────────────────────────────────────────────────────────────────
@@ -38,10 +33,6 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
     stray wrappers, checks completeness, and wraps for draw.io.
     """
     xml: str = params.get("xml", "")
-    layout = params.get("layout")
-    if not isinstance(layout, str) or layout not in SUPPORTED_AUTO_LAYOUTS:
-        layout = DEFAULT_DISPLAY_DIAGRAM_LAYOUT
-    context.display_layout = layout
 
     # 1. Non-empty check.
     if not xml or not xml.strip():
@@ -109,12 +100,10 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
             content="\n".join(message_parts),
             xml=xml,          # raw partial fragment stored in context
             is_truncated=True,
-            layout=layout,
         )
 
     # 6. Wrap and return the full diagram.
     full_xml = add_mxgraph_wrapper(xml)
-    full_xml = normalize_wrapped_xml_for_auto_layout(full_xml, layout)
 
     message_parts = warnings + ["Diagram created successfully."]
     return ToolResult(
@@ -122,7 +111,6 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
         content="\n".join(message_parts),
         xml=full_xml,
         is_truncated=False,
-        layout=layout,
     )
 
 

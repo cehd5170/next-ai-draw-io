@@ -124,8 +124,6 @@ def _tool_output_payload(tool_name: str, result: ToolResult) -> Any:
     }
     if result.xml is not None:
         payload["xml"] = result.xml
-    if result.layout is not None:
-        payload["layout"] = result.layout
     return payload
 
 
@@ -357,8 +355,6 @@ class AgentsService:
             result = await dispatch_tool(name, arguments, tool_context)
             if result.xml is not None:
                 tool_context.current_xml = result.xml
-            if result.layout is not None:
-                tool_context.display_layout = result.layout
 
             await _close_supervisor_text()
             if result.success and not result.is_truncated:
