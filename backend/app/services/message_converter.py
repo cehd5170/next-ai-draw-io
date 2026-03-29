@@ -42,6 +42,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_DIAGRAM_TOOL_OUTPUT_PLACEHOLDER = (
+    "[Diagram tool output replaced - see current diagram XML in system context]"
+)
+
 
 def _get_part_url(part: dict[str, Any]) -> str:
     return str(part.get("url") or part.get("data") or "")
@@ -291,7 +295,10 @@ def _convert_assistant_message(parts: list[Any]) -> list[dict[str, Any]]:
                     output = part.get("output", "")
 
                 if isinstance(output, dict):
-                    output = json.dumps(output, ensure_ascii=False)
+                    if tool_name in {"display_diagram", "edit_diagram", "append_diagram"}:
+                        output = _DIAGRAM_TOOL_OUTPUT_PLACEHOLDER
+                    else:
+                        output = json.dumps(output, ensure_ascii=False)
                 elif output is None:
                     output = ""
                 else:

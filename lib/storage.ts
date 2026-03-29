@@ -31,6 +31,9 @@ export const STORAGE_KEYS = {
     // PDF handling
     pdfInputMode: "next-ai-draw-io-pdf-input-mode",
 
+    // Chat endpoint routing
+    chatEndpointMode: "next-ai-draw-io-chat-endpoint-mode",
+
     // Custom system message
     customSystemMessage: "next-ai-draw-io-custom-system-message",
 

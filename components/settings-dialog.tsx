@@ -73,6 +73,8 @@ interface SettingsDialogProps {
     onVlmValidationChange?: (value: boolean) => void
     pdfInputMode?: "text" | "base64"
     onPdfInputModeChange?: (value: "text" | "base64") => void
+    chatEndpointMode?: "chat" | "agents"
+    onChatEndpointModeChange?: (value: "chat" | "agents") => void
     autoLayoutType?: import("@/contexts/diagram-context").AutoLayoutType
     onAutoLayoutTypeChange?: (
         value: import("@/contexts/diagram-context").AutoLayoutType,
@@ -105,6 +107,8 @@ function SettingsContent({
     onVlmValidationChange = () => {},
     pdfInputMode = "text",
     onPdfInputModeChange = () => {},
+    chatEndpointMode = "chat",
+    onChatEndpointModeChange = () => {},
     autoLayoutType = "none",
     onAutoLayoutTypeChange = () => {},
     onOpenModelConfig,
@@ -470,6 +474,33 @@ function SettingsContent({
                                     : dict.settings.disabled}
                             </span>
                         </div>
+                    </SettingItem>
+
+                    <SettingItem
+                        label="Chat Endpoint"
+                        description="Choose the backend route for new messages. `chat-agents` uses the experimental LangChain create_agent path."
+                    >
+                        <Select
+                            value={chatEndpointMode}
+                            onValueChange={(value: "chat" | "agents") =>
+                                onChatEndpointModeChange(value)
+                            }
+                        >
+                            <SelectTrigger
+                                id="chat-endpoint-select"
+                                className="w-[180px] h-9 rounded-xl"
+                            >
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="chat">
+                                    chat (/api/chat)
+                                </SelectItem>
+                                <SelectItem value="agents">
+                                    chat-agents (/api/chat-agents)
+                                </SelectItem>
+                            </SelectContent>
+                        </Select>
                     </SettingItem>
 
                     <SettingItem

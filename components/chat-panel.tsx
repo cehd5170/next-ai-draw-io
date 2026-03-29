@@ -47,6 +47,7 @@ const STORAGE_SESSION_ID_KEY = "next-ai-draw-io-session-id"
 
 // sessionStorage keys
 const SESSION_STORAGE_INPUT_KEY = "next-ai-draw-io-input"
+type ChatEndpointMode = "chat" | "agents"
 
 interface ChatPanelProps {
     isVisible: boolean
@@ -149,6 +150,8 @@ export default function ChatPanel({
     const [minimalStyle, setMinimalStyle] = useState(false)
     const [vlmValidationEnabled, setVlmValidationEnabled] = useState(false)
     const [pdfInputMode, setPdfInputMode] = useState<"text" | "base64">("text")
+    const [chatEndpointMode, setChatEndpointMode] =
+        useState<ChatEndpointMode>("chat")
     const [customSystemMessage, setCustomSystemMessage] = useState("")
     const [shouldFocusInput, setShouldFocusInput] = useState(false)
 
@@ -172,6 +175,13 @@ export default function ChatPanel({
         const stored = localStorage.getItem(STORAGE_KEYS.pdfInputMode)
         if (stored === "text" || stored === "base64") {
             setPdfInputMode(stored)
+        }
+    }, [])
+
+    useEffect(() => {
+        const stored = localStorage.getItem(STORAGE_KEYS.chatEndpointMode)
+        if (stored === "chat" || stored === "agents") {
+            setChatEndpointMode(stored)
         }
     }, [])
 
@@ -300,6 +310,17 @@ export default function ChatPanel({
         localStorage.setItem(STORAGE_KEYS.pdfInputMode, value)
     }, [])
 
+    const handleChatEndpointModeChange = useCallback(
+        (value: ChatEndpointMode) => {
+            setChatEndpointMode(value)
+            localStorage.setItem(STORAGE_KEYS.chatEndpointMode, value)
+        },
+        [],
+    )
+
+    const chatApiPath =
+        chatEndpointMode === "agents" ? "/api/chat-agents" : "/api/chat"
+
     // Ref to store the sendMessage function for use in callbacks
     const sendMessageRef = useRef<typeof sendMessage | null>(null)
 
@@ -349,7 +370,7 @@ export default function ChatPanel({
     } = useChat({
         experimental_throttle: 50,
         transport: new DefaultChatTransport({
-            api: getApiEndpoint("/api/chat"),
+            api: getApiEndpoint(chatApiPath),
         }),
         onError: (error) => {
             // Handle server-side quota limit (429 response)
@@ -1409,6 +1430,8 @@ export default function ChatPanel({
                 onVlmValidationChange={handleVlmValidationChange}
                 pdfInputMode={pdfInputMode}
                 onPdfInputModeChange={handlePdfInputModeChange}
+                chatEndpointMode={chatEndpointMode}
+                onChatEndpointModeChange={handleChatEndpointModeChange}
                 customSystemMessage={customSystemMessage}
                 onCustomSystemMessageChange={handleCustomSystemMessageChange}
                 autoLayoutType={autoLayoutType}

@@ -35,6 +35,10 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { useDictionary } from "@/hooks/use-dictionary"
 import { getApiEndpoint } from "@/lib/base-path"
 import {
+    formatValidationFeedback,
+    type ValidationResult,
+} from "@/lib/diagram-validator"
+import {
     applyDiagramOperations,
     convertToLegalXml,
     extractCompleteMxCells,
@@ -59,6 +63,21 @@ function getCompleteOperations(
 }
 
 import { useDiagram } from "@/contexts/diagram-context"
+
+const VALIDATION_CAPTURE_TIMEOUT_MS = 4000
+const VALIDATION_REQUEST_TIMEOUT_MS = 8000
+
+interface DiagramToolOutput {
+    message?: string
+    xml?: string
+    success?: boolean
+    isTruncated?: boolean
+}
+
+type ValidateDiagramFn = (
+    imageData: string,
+    sessionId?: string,
+) => Promise<ValidationResult>
 
 // Helper to split text content into regular text and file/URL sections (PDF, text files, or URLs)
 interface TextSection {
@@ -185,6 +204,14 @@ interface ChatMessageDisplayProps {
     loadedMessageIdsRef?: MutableRefObject<Set<string>>
     validationStates?: Record<string, ValidationState>
     onImproveWithSuggestions?: (feedback: string) => void
+    captureValidationPng?: () => Promise<string | null>
+    validateDiagram?: ValidateDiagramFn
+    enableVlmValidation?: boolean
+    onValidationStateChange?: (
+        toolCallId: string,
+        state: ValidationState,
+    ) => void
+    onVlmValidationFailure?: (feedback: string) => void
 }
 
 export function ChatMessageDisplay({
@@ -205,6 +232,11 @@ export function ChatMessageDisplay({
     loadedMessageIdsRef,
     validationStates = {},
     onImproveWithSuggestions,
+    captureValidationPng,
+    validateDiagram,
+    enableVlmValidation = false,
+    onValidationStateChange,
+    onVlmValidationFailure,
 }: ChatMessageDisplayProps) {
     const dict = useDictionary()
     const { loadDiagram: onDisplayChart } = useDiagram()
@@ -264,6 +296,136 @@ export function ChatMessageDisplay({
     const [expandedPdfSections, setExpandedPdfSections] = useState<
         Record<string, boolean>
     >({})
+
+    const withTimeout = useCallback(async function withTimeout<T>(
+        promise: Promise<T>,
+        timeoutMs: number,
+        label: string,
+    ) {
+        let timeoutId: ReturnType<typeof setTimeout> | null = null
+        try {
+            return await Promise.race([
+                promise,
+                new Promise<T>((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                        reject(
+                            new Error(
+                                `${label} timed out after ${timeoutMs}ms`,
+                            ),
+                        )
+                    }, timeoutMs)
+                }),
+            ])
+        } finally {
+            if (timeoutId) {
+                clearTimeout(timeoutId)
+            }
+        }
+    }, [])
+
+    const updateValidationState = useCallback(
+        (
+            toolCallId: string,
+            status: ValidationState["status"],
+            options?: {
+                result?: ValidationResult
+                error?: string
+                imageData?: string
+            },
+        ) => {
+            onValidationStateChange?.(toolCallId, {
+                status,
+                ...options,
+            })
+        },
+        [onValidationStateChange],
+    )
+
+    const runDiagramValidation = useCallback(
+        (toolCallId: string) => {
+            if (
+                !enableVlmValidation ||
+                !captureValidationPng ||
+                !validateDiagram ||
+                !onVlmValidationFailure
+            ) {
+                return
+            }
+
+            void (async () => {
+                let capturedPngData: string | null = null
+                try {
+                    updateValidationState(toolCallId, "capturing")
+
+                    await new Promise((resolve) => setTimeout(resolve, 100))
+
+                    capturedPngData = await withTimeout(
+                        captureValidationPng(),
+                        VALIDATION_CAPTURE_TIMEOUT_MS,
+                        "Diagram capture",
+                    )
+                    if (!capturedPngData) {
+                        updateValidationState(toolCallId, "skipped")
+                        return
+                    }
+
+                    updateValidationState(toolCallId, "validating", {
+                        imageData: capturedPngData,
+                    })
+
+                    const result = await withTimeout(
+                        validateDiagram(capturedPngData, sessionId),
+                        VALIDATION_REQUEST_TIMEOUT_MS,
+                        "Diagram validation",
+                    )
+
+                    if (!result.valid) {
+                        updateValidationState(toolCallId, "failed", {
+                            result,
+                            imageData: capturedPngData,
+                        })
+                        onVlmValidationFailure(formatValidationFeedback(result))
+                        return
+                    }
+
+                    const hasWarnings = result.issues.length > 0
+                    updateValidationState(
+                        toolCallId,
+                        hasWarnings ? "success_with_warnings" : "success",
+                        {
+                            result,
+                            imageData: capturedPngData,
+                        },
+                    )
+                } catch (error) {
+                    const message =
+                        error instanceof Error
+                            ? error.message
+                            : "Validation failed"
+                    const timedOut = message.toLowerCase().includes("timed out")
+                    updateValidationState(
+                        toolCallId,
+                        timedOut ? "skipped" : "error",
+                        timedOut
+                            ? { imageData: capturedPngData || undefined }
+                            : {
+                                  error: message,
+                                  imageData: capturedPngData || undefined,
+                              },
+                    )
+                }
+            })()
+        },
+        [
+            captureValidationPng,
+            enableVlmValidation,
+            onVlmValidationFailure,
+            sessionId,
+            updateValidationState,
+            validateDiagram,
+            withTimeout,
+        ],
+    )
 
     const setCopyState = (
         messageId: string,
@@ -457,6 +619,8 @@ export function ChatMessageDisplay({
             messages.length > 0 ? [messages[messages.length - 1]] : []
 
         messagesToProcess.forEach((message) => {
+            const isRestoredToolMessage =
+                loadedMessageIdsRef?.current.has(message.id) ?? false
             if (message.parts) {
                 message.parts.forEach((part) => {
                     if (part.type?.startsWith("tool-")) {
@@ -479,11 +643,20 @@ export function ChatMessageDisplay({
                             input?.xml
                         ) {
                             const xml = input.xml as string
+                            const output =
+                                typeof toolPart.output === "object" &&
+                                toolPart.output !== null
+                                    ? (toolPart.output as DiagramToolOutput)
+                                    : null
+                            const finalXml =
+                                typeof output?.xml === "string"
+                                    ? output.xml
+                                    : xml
 
                             // Skip if XML hasn't changed since last processing
                             const lastXml =
                                 lastProcessedXmlRef.current.get(toolCallId)
-                            if (lastXml === xml) {
+                            if (lastXml === finalXml) {
                                 return // Skip redundant processing
                             }
 
@@ -527,8 +700,11 @@ export function ChatMessageDisplay({
                                     pendingXmlRef.current = null
                                 }
                                 // Show toast only if final XML is malformed
-                                handleDisplayChart(xml, true)
+                                handleDisplayChart(finalXml, true)
                                 processedToolCalls.current.add(toolCallId)
+                                if (!isRestoredToolMessage) {
+                                    runDiagramValidation(toolCallId)
+                                }
                                 // Clean up the ref entry - tool is complete, no longer needed
                                 lastProcessedXmlRef.current.delete(toolCallId)
                             }
@@ -640,7 +816,16 @@ export function ChatMessageDisplay({
                                 state === "output-available" &&
                                 !processedToolCalls.current.has(toolCallId)
                             ) {
-                                // Final state - cleanup streaming refs (tool handler does final application)
+                                const output =
+                                    typeof toolPart.output === "object" &&
+                                    toolPart.output !== null
+                                        ? (toolPart.output as DiagramToolOutput)
+                                        : null
+                                if (typeof output?.xml === "string") {
+                                    handleDisplayChart(output.xml, true)
+                                }
+
+                                // Final state - cleanup streaming refs after server result is applied
                                 if (editDebounceTimeoutRef.current) {
                                     clearTimeout(editDebounceTimeoutRef.current)
                                     editDebounceTimeoutRef.current = null
@@ -649,7 +834,33 @@ export function ChatMessageDisplay({
                                     toolCallId + "-opCount",
                                 )
                                 processedToolCalls.current.add(toolCallId)
-                                // Note: Don't delete editDiagramOriginalXmlRef here - tool handler needs it
+                                editDiagramOriginalXmlRef.current.delete(
+                                    toolCallId,
+                                )
+                            } else if (state === "output-error") {
+                                editDiagramOriginalXmlRef.current.delete(
+                                    toolCallId,
+                                )
+                            }
+                        }
+
+                        if (
+                            part.type === "tool-append_diagram" &&
+                            state === "output-available" &&
+                            !processedToolCalls.current.has(toolCallId)
+                        ) {
+                            const output =
+                                typeof toolPart.output === "object" &&
+                                toolPart.output !== null
+                                    ? (toolPart.output as DiagramToolOutput)
+                                    : null
+
+                            if (typeof output?.xml === "string") {
+                                handleDisplayChart(output.xml, true)
+                                processedToolCalls.current.add(toolCallId)
+                                if (!isRestoredToolMessage) {
+                                    runDiagramValidation(toolCallId)
+                                }
                             }
                         }
                     }
@@ -661,7 +872,14 @@ export function ChatMessageDisplay({
         // The cleanup runs on every re-render (when messages changes),
         // which would cancel the timeout before it fires.
         // Let the timeouts complete naturally - they're harmless if component unmounts.
-    }, [messages, handleDisplayChart])
+    }, [
+        editDiagramOriginalXmlRef,
+        handleDisplayChart,
+        loadedMessageIdsRef,
+        messages,
+        processedToolCalls,
+        runDiagramValidation,
+    ])
 
     return (
         <ScrollArea className="h-full w-full scrollbar-thin">
@@ -955,9 +1173,11 @@ export function ChatMessageDisplay({
                                                             .parts[0] as ToolPartLike
                                                         const toolCallId =
                                                             toolPart.toolCallId
-                                                        const isDisplayDiagram =
+                                                        const showsValidation =
                                                             toolPart.type ===
-                                                            "tool-display_diagram"
+                                                                "tool-display_diagram" ||
+                                                            toolPart.type ===
+                                                                "tool-append_diagram"
                                                         const validationState =
                                                             validationStates[
                                                                 toolCallId
@@ -988,8 +1208,8 @@ export function ChatMessageDisplay({
                                                                     }
                                                                     dict={dict}
                                                                 />
-                                                                {/* Show validation card for display_diagram tools */}
-                                                                {isDisplayDiagram &&
+                                                                {/* Show validation card for final diagram-generation tools */}
+                                                                {showsValidation &&
                                                                     validationState && (
                                                                         <ValidationCard
                                                                             state={

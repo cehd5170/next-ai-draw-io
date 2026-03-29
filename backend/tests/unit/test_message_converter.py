@@ -164,6 +164,35 @@ class TestConvertUIMessagesToLitellm:
         assert result[1]["tool_call_id"] == "call_123"
         assert result[1]["content"] == "Displayed"
 
+    def test_diagram_tool_output_dict_is_replaced_with_placeholder(self):
+        messages = [
+            {
+                "id": "msg_1",
+                "role": "assistant",
+                "parts": [
+                    {
+                        "type": "tool-invocation",
+                        "toolCallId": "call_123",
+                        "toolName": "display_diagram",
+                        "state": "output-available",
+                        "input": {"xml": "<mxCell/>"},
+                        "output": {
+                            "message": "Diagram created successfully.",
+                            "xml": "<mxGraphModel/>",
+                            "success": True,
+                        },
+                    },
+                ],
+            }
+        ]
+        result = convert_ui_messages_to_litellm(messages)
+        assert len(result) == 2
+        assert result[1]["role"] == "tool"
+        assert (
+            result[1]["content"]
+            == "[Diagram tool output replaced - see current diagram XML in system context]"
+        )
+
     def test_skips_system_messages(self):
         messages = [
             {"role": "system", "parts": [{"type": "text", "text": "System prompt"}]},

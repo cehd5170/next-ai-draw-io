@@ -71,6 +71,10 @@ export function ToolCallCard({
     const isExpanded = expandedTools[callId] ?? true
     const toolName = part.type?.replace("tool-", "")
     const isCopied = copiedToolCallId === callId
+    const outputObject =
+        output && typeof output === "object"
+            ? (output as Record<string, unknown>)
+            : null
 
     const toggleExpanded = () => {
         setExpandedTools((prev) => ({
@@ -85,6 +89,8 @@ export function ToolCallCard({
                 return "Generate Diagram"
             case "edit_diagram":
                 return "Edit Diagram"
+            case "append_diagram":
+                return "Continue Diagram"
             case "get_shape_library":
                 return "Get Shape Library"
             default:
@@ -95,7 +101,9 @@ export function ToolCallCard({
     const handleCopy = () => {
         let textToCopy = ""
 
-        if (input && typeof input === "object") {
+        if (outputObject && typeof outputObject.xml === "string") {
+            textToCopy = outputObject.xml
+        } else if (input && typeof input === "object") {
             if (input.xml) {
                 textToCopy = input.xml
             } else if (input.operations && Array.isArray(input.operations)) {
@@ -216,7 +224,14 @@ export function ToolCallCard({
                         (toolName === "display_diagram" ||
                             toolName === "append_diagram") &&
                         !isMxCellXmlComplete(input?.xml)
-                    const message = errorText || output || ""
+                    const message =
+                        errorText ||
+                        (typeof output === "string"
+                            ? output
+                            : outputObject?.message &&
+                                typeof outputObject.message === "string"
+                              ? outputObject.message
+                              : "")
                     return (
                         <div
                             className={`px-4 py-3 border-t border-border/40 text-sm ${isTruncated ? "text-yellow-600" : "text-red-600"}`}
