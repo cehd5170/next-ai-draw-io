@@ -34,6 +34,7 @@ from app.services.chat_service import (
     _nanoid,
     _sse,
 )
+from app.tools.layout_policy import apply_display_diagram_layout_defaults
 from app.tools.registry import ToolContext, ToolResult, dispatch_tool
 
 logger = logging.getLogger(__name__)
@@ -123,6 +124,8 @@ def _tool_output_payload(tool_name: str, result: ToolResult) -> Any:
     }
     if result.xml is not None:
         payload["xml"] = result.xml
+    if result.layout is not None:
+        payload["layout"] = result.layout
     return payload
 
 
@@ -336,6 +339,7 @@ class AgentsService:
             return state
 
         async def _run_registry_tool(name: str, arguments: dict[str, Any]) -> ToolResult:
+            arguments = apply_display_diagram_layout_defaults(name, arguments)
             state = await _claim_pending_tool_call(name)
 
             if not state.input_available_emitted:
@@ -353,6 +357,8 @@ class AgentsService:
             result = await dispatch_tool(name, arguments, tool_context)
             if result.xml is not None:
                 tool_context.current_xml = result.xml
+            if result.layout is not None:
+                tool_context.display_layout = result.layout
 
             await _close_supervisor_text()
             if result.success and not result.is_truncated:
@@ -375,9 +381,15 @@ class AgentsService:
             return result
 
         @tool(args_schema=DisplayDiagramInput)
-        async def display_diagram(xml: str) -> str:
+        async def display_diagram(
+            xml: str,
+            layout: str | None = None,
+        ) -> str:
             """Create a new diagram from raw mxCell XML."""
-            result = await _run_registry_tool("display_diagram", {"xml": xml})
+            result = await _run_registry_tool(
+                "display_diagram",
+                {"xml": xml, "layout": layout},
+            )
             return result.content
 
         @tool(args_schema=EditDiagramInput)

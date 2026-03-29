@@ -195,6 +195,7 @@ class TestChatServiceToolStreaming:
         available_event = parsed_events[available_index]
         assert available_event["toolName"] == "display_diagram"
         assert available_event["input"]["xml"] == '<mxCell id="2" value="A"/>'
+        assert available_event["input"]["layout"] == "mxHierarchicalLayout"
         output_event = next(
             event
             for event in parsed_events

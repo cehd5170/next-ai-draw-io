@@ -155,6 +155,19 @@ class DisplayDiagramInput(BaseModel):
     """Input schema for the display_diagram tool."""
 
     xml: str = Field(..., description="mxCell XML elements to display on the canvas")
+    layout: Optional[
+        Literal[
+            "none",
+            "mxHierarchicalLayout",
+            "mxFastOrganicLayout",
+            "mxCircleLayout",
+            "mxCompactTreeLayout",
+            "mxRadialTreeLayout",
+        ]
+    ] = Field(
+        default=None,
+        description="Optional auto-layout algorithm to apply after rendering",
+    )
 
 
 class EditOperation(BaseModel):

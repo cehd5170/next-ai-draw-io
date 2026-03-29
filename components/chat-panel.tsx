@@ -31,7 +31,12 @@ import { useSessionManager } from "@/hooks/use-session-manager"
 import { useValidateDiagram } from "@/hooks/use-validate-diagram"
 import { getApiEndpoint } from "@/lib/base-path"
 import { findCachedResponse } from "@/lib/cached-responses"
-import { isPdfFile, isTextFile } from "@/lib/pdf-utils"
+import {
+    extractPdfText,
+    isPdfFile,
+    isTextFile,
+    MAX_EXTRACTED_CHARS,
+} from "@/lib/pdf-utils"
 import { sanitizeMessages } from "@/lib/session-storage"
 import { STORAGE_KEYS } from "@/lib/storage"
 import type { UrlData } from "@/lib/url-utils"
@@ -359,104 +364,101 @@ export default function ChatPanel({
     // VLM validation hook using AI SDK's useObject
     const { validateWithFallback } = useValidateDiagram()
 
-    const {
-        messages,
-        sendMessage,
-        addToolOutput,
-        status,
-        error,
-        setMessages,
-        stop,
-    } = useChat({
-        experimental_throttle: 50,
-        transport: new DefaultChatTransport({
-            api: getApiEndpoint(chatApiPath),
-        }),
-        onError: (error) => {
-            // Handle server-side quota limit (429 response)
-            // AI SDK puts the full response body in error.message for non-OK responses
-            try {
-                const data = JSON.parse(error.message)
-                if (data.type === "request") {
-                    quotaManager.showQuotaLimitToast(data.used, data.limit)
+    const { messages, sendMessage, status, error, setMessages, stop } = useChat(
+        {
+            experimental_throttle: 50,
+            transport: new DefaultChatTransport({
+                api: getApiEndpoint(chatApiPath),
+            }),
+            onError: (error) => {
+                // Handle server-side quota limit (429 response)
+                // AI SDK puts the full response body in error.message for non-OK responses
+                try {
+                    const data = JSON.parse(error.message)
+                    if (data.type === "request") {
+                        quotaManager.showQuotaLimitToast(data.used, data.limit)
+                        return
+                    }
+                    if (data.type === "token") {
+                        quotaManager.showTokenLimitToast(data.used, data.limit)
+                        return
+                    }
+                    if (data.type === "tpm") {
+                        quotaManager.showTPMLimitToast(data.limit)
+                        return
+                    }
+                } catch {
+                    // Not JSON, fall through to string matching for backwards compatibility
+                }
+
+                // Fallback to string matching
+                if (error.message.includes("Daily request limit")) {
+                    quotaManager.showQuotaLimitToast()
                     return
                 }
-                if (data.type === "token") {
-                    quotaManager.showTokenLimitToast(data.used, data.limit)
+                if (error.message.includes("Daily token limit")) {
+                    quotaManager.showTokenLimitToast()
                     return
                 }
-                if (data.type === "tpm") {
-                    quotaManager.showTPMLimitToast(data.limit)
+                if (
+                    error.message.includes("Rate limit exceeded") ||
+                    error.message.includes("tokens per minute")
+                ) {
+                    quotaManager.showTPMLimitToast()
                     return
                 }
-            } catch {
-                // Not JSON, fall through to string matching for backwards compatibility
-            }
 
-            // Fallback to string matching
-            if (error.message.includes("Daily request limit")) {
-                quotaManager.showQuotaLimitToast()
-                return
-            }
-            if (error.message.includes("Daily token limit")) {
-                quotaManager.showTokenLimitToast()
-                return
-            }
-            if (
-                error.message.includes("Rate limit exceeded") ||
-                error.message.includes("tokens per minute")
-            ) {
-                quotaManager.showTPMLimitToast()
-                return
-            }
-
-            // Silence access code error in console since it's handled by UI
-            if (!error.message.includes("Invalid or missing access code")) {
-                console.error("Chat error:", error)
-            }
-
-            // Translate technical errors into user-friendly messages
-            // The server now handles detailed error messages, so we can display them directly.
-            // But we still handle connection/network errors that happen before reaching the server.
-            let friendlyMessage = error.message
-
-            // Simple check for network errors if message is generic
-            if (friendlyMessage === "Failed to fetch") {
-                friendlyMessage = "Network error. Please check your connection."
-            }
-
-            // Truncated tool input error (model output limit too low)
-            if (friendlyMessage.includes("toolUse.input is invalid")) {
-                friendlyMessage =
-                    "Output was truncated before the diagram could be generated. Try a simpler request or increase the maxOutputLength."
-            }
-
-            // Translate image not supported error
-            if (
-                friendlyMessage.includes("image content block") ||
-                friendlyMessage.toLowerCase().includes("image_url")
-            ) {
-                friendlyMessage = "This model doesn't support image input."
-            }
-
-            // Add system message for error so it can be cleared
-            setMessages((currentMessages) => {
-                const errorMessage = {
-                    id: `error-${Date.now()}`,
-                    role: "system" as const,
-                    content: friendlyMessage,
-                    parts: [{ type: "text" as const, text: friendlyMessage }],
+                // Silence access code error in console since it's handled by UI
+                if (!error.message.includes("Invalid or missing access code")) {
+                    console.error("Chat error:", error)
                 }
-                return [...currentMessages, errorMessage]
-            })
 
-            if (error.message.includes("Invalid or missing access code")) {
-                // Show settings dialog to help user fix it
-                setShowSettingsDialog(true)
-            }
+                // Translate technical errors into user-friendly messages
+                // The server now handles detailed error messages, so we can display them directly.
+                // But we still handle connection/network errors that happen before reaching the server.
+                let friendlyMessage = error.message
+
+                // Simple check for network errors if message is generic
+                if (friendlyMessage === "Failed to fetch") {
+                    friendlyMessage =
+                        "Network error. Please check your connection."
+                }
+
+                // Truncated tool input error (model output limit too low)
+                if (friendlyMessage.includes("toolUse.input is invalid")) {
+                    friendlyMessage =
+                        "Output was truncated before the diagram could be generated. Try a simpler request or increase the maxOutputLength."
+                }
+
+                // Translate image not supported error
+                if (
+                    friendlyMessage.includes("image content block") ||
+                    friendlyMessage.toLowerCase().includes("image_url")
+                ) {
+                    friendlyMessage = "This model doesn't support image input."
+                }
+
+                // Add system message for error so it can be cleared
+                setMessages((currentMessages) => {
+                    const errorMessage = {
+                        id: `error-${Date.now()}`,
+                        role: "system" as const,
+                        content: friendlyMessage,
+                        parts: [
+                            { type: "text" as const, text: friendlyMessage },
+                        ],
+                    }
+                    return [...currentMessages, errorMessage]
+                })
+
+                if (error.message.includes("Invalid or missing access code")) {
+                    // Show settings dialog to help user fix it
+                    setShowSettingsDialog(true)
+                }
+            },
+            onFinish: () => {},
         },
-        onFinish: () => {},
-    })
+    )
 
     useEffect(() => {
         if (!DEBUG || messages.length === 0) return
@@ -988,26 +990,8 @@ export default function ChatPanel({
 
     // Handle stop button click
     const handleStop = useCallback(() => {
-        const lastMessage = messages[messages.length - 1]
-        const toolParts = lastMessage?.parts?.filter(
-            (part: any) =>
-                part.type?.startsWith("tool-") &&
-                part.state === "input-streaming",
-        )
-
-        toolParts?.forEach((part: any) => {
-            if (part.toolCallId) {
-                addToolOutput({
-                    tool: part.type.replace("tool-", ""),
-                    toolCallId: part.toolCallId,
-                    state: "output-error",
-                    errorText: "Stopped by user",
-                })
-            }
-        })
-
         stop()
-    }, [messages, addToolOutput, stop])
+    }, [stop])
 
     // Send chat message with headers
     const sendChatMessage = (
@@ -1083,6 +1067,33 @@ export default function ChatPanel({
     ): Promise<string> => {
         let userText = baseText
 
+        const getPdfTextFallback = async (file: File): Promise<string> => {
+            const cachedText = pdfData.get(file)?.text?.trim()
+            if (cachedText) {
+                return cachedText
+            }
+
+            try {
+                const extracted = (await extractPdfText(file)).trim()
+                if (!extracted) {
+                    return ""
+                }
+                if (extracted.length <= MAX_EXTRACTED_CHARS) {
+                    return extracted
+                }
+                return (
+                    extracted.slice(0, MAX_EXTRACTED_CHARS) +
+                    "\n\n[PDF text truncated for history fallback]"
+                )
+            } catch (error) {
+                console.warn(
+                    `[pdf fallback] Failed to extract text for ${file.name}:`,
+                    error,
+                )
+                return ""
+            }
+        }
+
         for (const file of files) {
             if (isTextFile(file)) {
                 // Text files: extract and append as text (models don't accept these natively)
@@ -1105,19 +1116,23 @@ export default function ChatPanel({
                 })
                 if (!dataUrl) continue
                 const mediaType = file.type || getMediaTypeFromDataUrl(dataUrl)
+                const textFallback = isPdfFile(file)
+                    ? await getPdfTextFallback(file)
+                    : ""
 
                 imageParts.push({
                     type: "file",
                     url: dataUrl,
                     mediaType,
                     filename: file.name,
+                    ...(textFallback && { textFallback }),
                 })
             } else if (isPdfFile(file)) {
                 // Fallback for cached response path (no imageParts array):
                 // use extracted text if available
-                const extracted = pdfData.get(file)
-                if (extracted?.text) {
-                    userText += `\n\n[PDF: ${file.name}]\n${extracted.text}`
+                const textFallback = await getPdfTextFallback(file)
+                if (textFallback) {
+                    userText += `\n\n[PDF: ${file.name}]\n${textFallback}`
                 }
             }
         }

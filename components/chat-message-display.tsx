@@ -70,6 +70,7 @@ const VALIDATION_REQUEST_TIMEOUT_MS = 8000
 interface DiagramToolOutput {
     message?: string
     xml?: string
+    layout?: string
     success?: boolean
     isTruncated?: boolean
 }
@@ -78,6 +79,8 @@ type ValidateDiagramFn = (
     imageData: string,
     sessionId?: string,
 ) => Promise<ValidationResult>
+
+const DEFAULT_AI_DISPLAY_LAYOUT = "mxHierarchicalLayout"
 
 // Helper to split text content into regular text and file/URL sections (PDF, text files, or URLs)
 interface TextSection {
@@ -521,7 +524,7 @@ export function ChatMessageDisplay({
     }
 
     const handleDisplayChart = useCallback(
-        (xml: string, showToast = false) => {
+        (xml: string, showToast = false, layout?: string) => {
             let currentXml = xml || ""
 
             // During streaming (showToast=false), extract only complete mxCell elements
@@ -565,7 +568,7 @@ export function ChatMessageDisplay({
                     const prepared = prepareDiagramXmlForDisplay(currentXml)
                     if (prepared.valid) {
                         previousXML.current = convertedXml
-                        onDisplayChart(prepared.xml, true)
+                        onDisplayChart(prepared.xml, true, true, layout as any)
                     } else {
                         toast.error(dict.errors.validationFailed)
                     }
@@ -648,6 +651,14 @@ export function ChatMessageDisplay({
                                 toolPart.output !== null
                                     ? (toolPart.output as DiagramToolOutput)
                                     : null
+                            const layout =
+                                typeof output?.layout === "string" &&
+                                output.layout.trim().length > 0
+                                    ? output.layout
+                                    : typeof input?.layout === "string" &&
+                                        input.layout.trim().length > 0
+                                      ? input.layout
+                                      : DEFAULT_AI_DISPLAY_LAYOUT
                             const finalXml =
                                 typeof output?.xml === "string"
                                     ? output.xml
@@ -700,7 +711,7 @@ export function ChatMessageDisplay({
                                     pendingXmlRef.current = null
                                 }
                                 // Show toast only if final XML is malformed
-                                handleDisplayChart(finalXml, true)
+                                handleDisplayChart(finalXml, true, layout)
                                 processedToolCalls.current.add(toolCallId)
                                 if (!isRestoredToolMessage) {
                                     runDiagramValidation(toolCallId)
@@ -856,7 +867,12 @@ export function ChatMessageDisplay({
                                     : null
 
                             if (typeof output?.xml === "string") {
-                                handleDisplayChart(output.xml, true)
+                                const layout =
+                                    typeof output.layout === "string" &&
+                                    output.layout.trim().length > 0
+                                        ? output.layout
+                                        : DEFAULT_AI_DISPLAY_LAYOUT
+                                handleDisplayChart(output.xml, true, layout)
                                 processedToolCalls.current.add(toolCallId)
                                 if (!isRestoredToolMessage) {
                                     runDiagramValidation(toolCallId)

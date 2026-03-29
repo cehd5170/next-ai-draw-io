@@ -12,6 +12,7 @@ class ToolContext:
     current_xml: str  # Current diagram XML on the canvas (may be empty string)
     shape_library_dir: str  # Absolute path to shape library markdown files
     settings: Any  # Settings instance
+    display_layout: str | None = None  # Preferred auto-layout for current diagram
 
 
 @dataclass
@@ -22,6 +23,7 @@ class ToolResult:
     content: str  # Human/LLM-readable result (XML, error, docs, …)
     xml: str | None = None  # Updated diagram XML when the diagram changed
     is_truncated: bool = False  # True when display_diagram output was cut short
+    layout: str | None = None  # Auto-layout chosen for display/append flows
 
 
 @dataclass

@@ -10,6 +10,7 @@ export interface ToolPartLike {
     state?: string
     input?: {
         xml?: string
+        layout?: string
         operations?: DiagramOperation[]
     } & Record<string, unknown>
     output?: string | Record<string, unknown>

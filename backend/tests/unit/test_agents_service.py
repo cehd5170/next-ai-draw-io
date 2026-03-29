@@ -121,6 +121,10 @@ class TestAgentsService:
         output_event = next(
             event for event in parsed if event["type"] == "tool-output-available"
         )
+        input_event = next(
+            event for event in parsed if event["type"] == "tool-input-available"
+        )
+        assert input_event["input"]["layout"] == "mxHierarchicalLayout"
         assert output_event["output"]["message"] == "Diagram created successfully."
         assert "<mxGraphModel>" in output_event["output"]["xml"]
 

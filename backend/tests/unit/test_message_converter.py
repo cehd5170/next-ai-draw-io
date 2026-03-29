@@ -94,6 +94,29 @@ class TestConvertUIMessagesToLitellm:
         result = convert_ui_messages_to_litellm(messages)
         assert result[0]["content"][0]["file"]["filename"] == "alias.pdf"
 
+    def test_user_message_with_pdf_text_fallback_when_inline_payload_missing(self):
+        messages = [
+            {
+                "id": "msg_1",
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "file",
+                        "mediaType": "application/pdf",
+                        "filename": "paper.pdf",
+                        "textFallback": "Section 1\nSection 2",
+                    },
+                ],
+            }
+        ]
+        result = convert_ui_messages_to_litellm(messages)
+        assert result[0]["content"] == [
+            {
+                "type": "text",
+                "text": "[PDF: paper.pdf]\nSection 1\nSection 2",
+            }
+        ]
+
     def test_user_message_infers_media_type_from_data_url(self):
         messages = [
             {

@@ -53,6 +53,7 @@ from app.models.chat import ChatRequest
 from app.providers.base import ModelConfig
 from app.services.json_repair import get_fallback_tool_input, repair_tool_call_json
 from app.tools.registry import ToolContext, ToolResult, dispatch_tool, get_tool_definitions
+from app.tools.layout_policy import apply_display_diagram_layout_defaults
 
 logger = logging.getLogger(__name__)
 _SHAPE_LIBRARY_DIR = str(
@@ -143,6 +144,8 @@ def _tool_output_payload(tool_name: str, result: ToolResult) -> Any:
     }
     if result.xml is not None:
         payload["xml"] = result.xml
+    if result.layout is not None:
+        payload["layout"] = result.layout
     return payload
 
 
@@ -787,6 +790,10 @@ class ChatService:
                 parsed_args = self._handle_truncated_tool_call(
                     tool_name, raw_args, output_truncated=output_truncated,
                 )
+                parsed_args = apply_display_diagram_layout_defaults(
+                    tool_name,
+                    parsed_args,
+                )
                 parsed_per_idx[idx] = parsed_args
 
                 # Ensure the LLM id is set; fall back to a generated one.
@@ -1334,6 +1341,8 @@ class ChatService:
             result = await dispatch_tool(name, arguments, context)
             if result.xml is not None:
                 context.current_xml = result.xml
+            if result.layout is not None:
+                context.display_layout = result.layout
             return result
         except Exception as exc:  # noqa: BLE001
             logger.error("Tool '%s' raised an exception: %s", name, exc, exc_info=True)

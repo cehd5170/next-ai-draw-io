@@ -71,6 +71,10 @@ def _get_part_filename(part: dict[str, Any], default: str) -> str:
     return str(part.get("filename") or part.get("name") or default)
 
 
+def _get_part_text_fallback(part: dict[str, Any]) -> str:
+    return str(part.get("textFallback") or part.get("extractedText") or "")
+
+
 def convert_ui_messages_to_litellm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Convert a list of AI SDK UIMessages (with ``parts``) to litellm-format
@@ -161,6 +165,7 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
             url = _get_part_url(part)
             media_type = _get_part_media_type(part)
             filename = _get_part_filename(part, "file")
+            text_fallback = _get_part_text_fallback(part).strip()
             logger.info(
                 "File part: mediaType=%r, has_url=%s, url_prefix=%s, name=%r",
                 media_type,
@@ -170,8 +175,20 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
             )
 
             if not url:
-                logger.warning(
-                    "File part has no 'url' or 'data' field; skipping. name=%r",
+                if text_fallback:
+                    label = "PDF" if media_type == "application/pdf" else "File"
+                    content.append({
+                        "type": "text",
+                        "text": f"[{label}: {filename}]\n{text_fallback}",
+                    })
+                    logger.info(
+                        "File part missing inline payload; used text fallback. name=%r",
+                        filename,
+                    )
+                    continue
+
+                logger.info(
+                    "File part has no 'url' or 'data' field; skipping metadata-only attachment. name=%r",
                     filename,
                 )
                 continue
