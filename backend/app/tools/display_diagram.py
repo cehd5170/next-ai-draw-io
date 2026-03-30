@@ -105,7 +105,9 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
     # 6. Wrap and return the full diagram.
     full_xml = add_mxgraph_wrapper(xml)
 
-    message_parts = warnings + ["Diagram created successfully."]
+    message_parts = warnings + [
+        "Diagram created successfully. Do not edit or refine — wait for user feedback."
+    ]
     return ToolResult(
         success=True,
         content="\n".join(message_parts),

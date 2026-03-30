@@ -202,7 +202,7 @@ class TestChatServiceToolStreaming:
             if event["type"] == "tool-output-available"
         )
         assert output_event["toolCallId"] == available_event["toolCallId"]
-        assert output_event["output"]["message"] == "Diagram created successfully."
+        assert "Diagram created successfully." in output_event["output"]["message"]
         assert "<mxGraphModel>" in output_event["output"]["xml"]
         assert _FakeAsyncOpenAI.instances[0].calls[0]["model"] == "gpt-4o"
 

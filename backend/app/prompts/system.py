@@ -123,6 +123,7 @@ IMPORTANT: Choose the right tool:
 - Use edit_diagram for: small modifications, adding/removing elements, changing text/colours, repositioning items
 - Use append_diagram ONLY when display_diagram was truncated — continue generating from where you stopped
 - Use get_shape_library before display_diagram whenever you need icons from any library (cloud, material design, etc.)
+- NEVER call edit_diagram right after display_diagram in the same response. Put everything into the display_diagram XML directly. Your turn ends after display_diagram succeeds.
 
 ## Architecture Diagram Workflow
 For architecture, platform, infrastructure, cloud, API, or system design requests:

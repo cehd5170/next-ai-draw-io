@@ -40,6 +40,33 @@ def _parse_cell_fragment(new_xml: str) -> etree._Element:
     return etree.fromstring(new_xml.strip().encode())
 
 
+def _parse_cell_fragments(new_xml: str) -> list[etree._Element]:
+    """
+    Parse one or more mxCell elements from *new_xml*.
+
+    LLMs sometimes pack multiple sibling ``<mxCell>`` elements into a single
+    ``new_xml`` value, which ``etree.fromstring`` rejects ("extra content at
+    the end of the document").  This helper wraps the input in a temporary
+    root, extracts all ``<mxCell>`` children, and returns them as a list.
+
+    Raises ``etree.XMLSyntaxError`` when the fragment is not valid XML at all.
+    """
+    stripped = new_xml.strip()
+    # Fast path: single element.
+    try:
+        el = etree.fromstring(stripped.encode())
+        return [el]
+    except etree.XMLSyntaxError:
+        pass
+
+    # Multiple siblings — wrap and extract.
+    wrapper = etree.fromstring(f"<_tmp_>{stripped}</_tmp_>".encode())
+    cells = list(wrapper)  # all direct children
+    if not cells:
+        raise etree.XMLSyntaxError("No elements found in new_xml", "", 0, 0, "")
+    return cells
+
+
 def _collect_descendant_ids(root_el: etree._Element, parent_id: str) -> list[str]:
     """
     Recursively collect the IDs of all mxCell elements whose parent chain
@@ -103,9 +130,13 @@ def _op_update(
         )
 
     try:
-        replacement = _parse_cell_fragment(new_xml)
+        elements = _parse_cell_fragments(new_xml)
     except etree.XMLSyntaxError as exc:
         return f"Invalid XML in 'new_xml' for update of id='{cell_id}': {exc}"
+
+    # The first element replaces the target; any extras are appended
+    # (LLMs sometimes bundle a shape + its edge in one new_xml value).
+    replacement = elements[0]
 
     if replacement.tag != "mxCell":
         return f"'new_xml' must be an <mxCell> element, got <{replacement.tag}>."
@@ -117,6 +148,11 @@ def _op_update(
     idx = list(parent).index(target)
     parent.remove(target)
     parent.insert(idx, replacement)
+
+    for extra in elements[1:]:
+        if extra.tag == "mxCell":
+            root_el.append(extra)
+
     return None
 
 
@@ -138,15 +174,16 @@ def _op_add(
         )
 
     try:
-        new_cell = _parse_cell_fragment(new_xml)
+        elements = _parse_cell_fragments(new_xml)
     except etree.XMLSyntaxError as exc:
         return f"Invalid XML in 'new_xml' for add of id='{cell_id}': {exc}"
 
-    if new_cell.tag != "mxCell":
-        return f"'new_xml' must be an <mxCell> element, got <{new_cell.tag}>."
+    first = elements[0]
+    if first.tag != "mxCell":
+        return f"'new_xml' must be an <mxCell> element, got <{first.tag}>."
 
     # Validate that the declared parent exists (skip reserved root cells).
-    parent_id = new_cell.get("parent")
+    parent_id = first.get("parent")
     if parent_id and parent_id not in ("0", "1"):
         if _find_cell(root_el, parent_id) is None:
             return (
@@ -154,8 +191,10 @@ def _op_add(
                 f"Available IDs: {', '.join(available_ids) or '(none)'}."
             )
 
-    # Append to the <root> element.
-    root_el.append(new_cell)
+    # Append all elements (LLMs sometimes bundle multiple cells in one operation).
+    for el in elements:
+        if el.tag == "mxCell":
+            root_el.append(el)
     return None
 
 

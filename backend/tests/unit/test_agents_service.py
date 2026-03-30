@@ -125,7 +125,7 @@ class TestAgentsService:
             event for event in parsed if event["type"] == "tool-input-available"
         )
         assert input_event["input"]["layout"] == "mxHierarchicalLayout"
-        assert output_event["output"]["message"] == "Diagram created successfully."
+        assert "Diagram created successfully." in output_event["output"]["message"]
         assert "<mxGraphModel>" in output_event["output"]["xml"]
 
     @pytest.mark.asyncio
