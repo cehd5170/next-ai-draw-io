@@ -62,6 +62,7 @@ _SHAPE_LIBRARY_DIR = str(
 
 # Cache tool definitions at module level — the registry never changes at runtime.
 _CACHED_TOOL_DEFS: list[dict] = []
+_DIAGRAM_TOOLS = {"display_diagram", "edit_diagram", "append_diagram"}
 
 
 def _init_tool_defs() -> None:
@@ -915,7 +916,6 @@ class ChatService:
             # tool_context.current_xml; keeping it in conversation
             # history wastes context and accelerates truncation in
             # subsequent steps (especially during append_diagram loops).
-            _DIAGRAM_TOOLS = {"display_diagram", "edit_diagram", "append_diagram"}
             if assistant_msg.get("tool_calls"):
                 for tc in assistant_msg["tool_calls"]:
                     fn = tc.get("function", {})

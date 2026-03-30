@@ -8,7 +8,6 @@ mxGeometry attributes.  Containers/groups are handled via Graphviz subgraphs.
 from __future__ import annotations
 
 import logging
-
 from lxml import etree
 
 from app.tools._xml_utils import parse_diagram_xml, serialise_diagram
@@ -30,6 +29,51 @@ _CONTAINER_TITLE_HEIGHT = 30
 # Graphviz graph-level tuning
 _GV_NODESEP = "0.8"
 _GV_RANKSEP = "1.2"
+
+_EDGE_CONNECTION_STYLE_KEYS = (
+    "exitX",
+    "exitY",
+    "exitDx",
+    "exitDy",
+    "exitPerimeter",
+    "entryX",
+    "entryY",
+    "entryDx",
+    "entryDy",
+    "entryPerimeter",
+    "curved",
+    "elbow",
+    "noEdgeStyle",
+    "routingCenterX",
+    "routingCenterY",
+)
+
+
+def _parse_style(style: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for token in style.split(";"):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" in token:
+            key, value = token.split("=", 1)
+            parsed[key] = value
+        else:
+            parsed[token] = ""
+    return parsed
+
+
+def _serialise_style(style_map: dict[str, str]) -> str:
+    return ";".join(
+        f"{key}={value}" if value else key
+        for key, value in style_map.items()
+    )
+
+
+def _format_anchor(value: float) -> str:
+    if value in (0.0, 1.0):
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
 
 
 def apply_graphviz_layout(xml: str, engine: str = "dot") -> str:
@@ -257,33 +301,98 @@ def apply_graphviz_layout(xml: str, engine: str = "dot") -> str:
             c_geo.set("x", str(round(float(c_geo.get("x", "0")) - container_x)))
             c_geo.set("y", str(round(float(c_geo.get("y", "0")) - container_y)))
 
-    # ── 8. Clear edge waypoints & fixed connection-point styles ────────
-    # After repositioning nodes, old waypoints and entryX/exitX styles
-    # become invalid.  Removing them lets draw.io auto-route edges.
-    import re
+    def _get_bounds(cell_id: str) -> tuple[float, float, float, float] | None:
+        cell = vertices.get(cell_id)
+        if cell is None:
+            return None
 
-    _EDGE_STYLE_KEYS = re.compile(
-        r"(exitX|exitY|exitDx|exitDy|exitPerimeter|"
-        r"entryX|entryY|entryDx|entryDy|entryPerimeter)=[^;]*;?"
-    )
+        geo = cell.find("mxGeometry")
+        if geo is None:
+            return None
+
+        width, height = node_sizes.get(cell_id, (_DEFAULT_W, _DEFAULT_H))
+        width = float(geo.get("width", str(width)))
+        height = float(geo.get("height", str(height)))
+        x = float(geo.get("x", "0"))
+        y = float(geo.get("y", "0"))
+
+        parent_id = cell_parent.get(cell_id, "1")
+        while parent_id not in ("0", "1"):
+            parent_cell = vertices.get(parent_id)
+            if parent_cell is None:
+                break
+            parent_geo = parent_cell.find("mxGeometry")
+            if parent_geo is not None:
+                x += float(parent_geo.get("x", "0"))
+                y += float(parent_geo.get("y", "0"))
+            parent_id = cell_parent.get(parent_id, "1")
+
+        return x, y, width, height
+
+    def _choose_connection_points(
+        source_bounds: tuple[float, float, float, float],
+        target_bounds: tuple[float, float, float, float],
+    ) -> tuple[float, float, float, float]:
+        sx = source_bounds[0] + source_bounds[2] / 2
+        sy = source_bounds[1] + source_bounds[3] / 2
+        tx = target_bounds[0] + target_bounds[2] / 2
+        ty = target_bounds[1] + target_bounds[3] / 2
+
+        dx = tx - sx
+        dy = ty - sy
+
+        if abs(dx) >= abs(dy):
+            if dx >= 0:
+                return 1.0, 0.5, 0.0, 0.5
+            return 0.0, 0.5, 1.0, 0.5
+
+        if dy >= 0:
+            return 0.5, 1.0, 0.5, 0.0
+        return 0.5, 0.0, 0.5, 1.0
+
+    # ── 8. Clear edge waypoints and rebuild connection points ───────────
+    # After repositioning nodes, old waypoints and entry/exit styles become
+    # invalid.  Recomputing them keeps arrow direction aligned with the new
+    # source/target placement instead of relying on draw.io guesses.
 
     for edge in edges:
         # Remove waypoints (mxPoint / Array inside mxGeometry)
         geo = edge.find("mxGeometry")
-        if geo is not None:
-            for child in list(geo):
-                tag = child.tag if isinstance(child.tag, str) else ""
-                if tag in ("mxPoint", "Array"):
-                    geo.remove(child)
+        if geo is None:
+            geo = etree.SubElement(edge, "mxGeometry")
+            geo.set("as", "geometry")
+        geo.set("relative", "1")
 
-        # Strip fixed connection-point style properties
-        style = edge.get("style", "")
-        if style:
-            cleaned = _EDGE_STYLE_KEYS.sub("", style)
-            # Clean up leftover semicolons
-            cleaned = re.sub(r";{2,}", ";", cleaned).strip(";")
-            if cleaned != style:
-                edge.set("style", cleaned)
+        for child in list(geo):
+            tag = child.tag if isinstance(child.tag, str) else ""
+            if tag in ("mxPoint", "Array"):
+                geo.remove(child)
+
+        style_map = _parse_style(edge.get("style", ""))
+        for key in _EDGE_CONNECTION_STYLE_KEYS:
+            style_map.pop(key, None)
+
+        source_id = edge.get("source", "")
+        target_id = edge.get("target", "")
+        source_bounds = _get_bounds(source_id)
+        target_bounds = _get_bounds(target_id)
+        if source_bounds and target_bounds:
+            exit_x, exit_y, entry_x, entry_y = _choose_connection_points(
+                source_bounds,
+                target_bounds,
+            )
+            style_map["edgeStyle"] = "orthogonalEdgeStyle"
+            style_map["orthogonalLoop"] = "1"
+            style_map["jettySize"] = "auto"
+            style_map["rounded"] = "0"
+            style_map["exitX"] = _format_anchor(exit_x)
+            style_map["exitY"] = _format_anchor(exit_y)
+            style_map["entryX"] = _format_anchor(entry_x)
+            style_map["entryY"] = _format_anchor(entry_y)
+
+        normalised_style = _serialise_style(style_map)
+        if normalised_style:
+            edge.set("style", normalised_style)
 
     # ── 9. Ensure no top-level element has negative coordinates ─────────
     top_level_cells = [

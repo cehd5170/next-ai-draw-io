@@ -18,9 +18,9 @@ from __future__ import annotations
 from app.tools.registry import Tool, ToolContext, ToolResult, register_tool
 from app.tools._xml_utils import (
     add_mxgraph_wrapper,
+    classify_mxcell_xml_fragment,
     has_mxcell,
     has_wrapper_tags,
-    is_mxcell_xml_complete,
 )
 from app.prompts.constants import TOOL_SCHEMAS
 
@@ -62,9 +62,9 @@ async def execute_append_diagram(params: dict, context: ToolContext) -> ToolResu
     combined = (partial.rstrip() + "\n" + fragment).strip()
 
     # 5. Completeness check.
-    complete = is_mxcell_xml_complete(combined)
+    xml_state = classify_mxcell_xml_fragment(combined)
 
-    if complete:
+    if xml_state == "complete":
         # Validate that we actually have at least one mxCell.
         if not has_mxcell(combined):
             return ToolResult(
@@ -81,6 +81,19 @@ async def execute_append_diagram(params: dict, context: ToolContext) -> ToolResu
             content="Diagram completed and displayed successfully.",
             xml=full_xml,
             is_truncated=False,
+        )
+
+    if xml_state == "malformed":
+        lines = combined.rstrip().splitlines()
+        tail = "\n".join(lines[-3:]) if len(lines) > 3 else combined.rstrip()
+        return ToolResult(
+            success=False,
+            content=(
+                "The combined diagram XML is malformed, not truncated. "
+                "Do not call append_diagram again. Regenerate the diagram XML instead.\n"
+                "Common causes: extra closing tags, mismatched nesting, or unescaped XML characters.\n"
+                f"Last lines received:\n{tail}"
+            ),
         )
 
     # 6. Still incomplete — signal for another append_diagram call.

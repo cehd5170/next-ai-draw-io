@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 import logging
 
+from app.tools._xml_utils import has_explicit_vertex_positions
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DISPLAY_DIAGRAM_LAYOUT = "mxHierarchicalLayout"
@@ -36,6 +38,11 @@ def apply_display_diagram_layout_defaults(
         if layout in SUPPORTED_AUTO_LAYOUTS:
             normalized["layout"] = layout
             return normalized
+
+    xml = normalized.get("xml")
+    if isinstance(xml, str) and has_explicit_vertex_positions(xml):
+        normalized["layout"] = "none"
+        return normalized
 
     normalized["layout"] = DEFAULT_DISPLAY_DIAGRAM_LAYOUT
     return normalized

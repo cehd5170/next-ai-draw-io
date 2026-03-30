@@ -14,14 +14,19 @@ from __future__ import annotations
 from app.tools.registry import Tool, ToolContext, ToolResult, register_tool
 from app.tools._xml_utils import (
     add_mxgraph_wrapper,
+    classify_mxcell_xml_fragment,
     has_mxcell,
     has_reserved_ids,
     has_wrapper_tags,
-    is_mxcell_xml_complete,
     strip_wrapper_tags,
 )
+from app.tools.graphviz_layout import apply_graphviz_layout
 from app.prompts.constants import TOOL_SCHEMAS
-from app.tools.layout_policy import DEFAULT_DISPLAY_DIAGRAM_LAYOUT, LAYOUT_TO_GV_ENGINE
+from app.tools.layout_policy import (
+    DEFAULT_DISPLAY_DIAGRAM_LAYOUT,
+    LAYOUT_TO_GV_ENGINE,
+    apply_display_diagram_layout_defaults,
+)
 
 
 # ── Execution ─────────────────────────────────────────────────────────────────
@@ -84,8 +89,8 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
         )
 
     # 5. Completeness check — detect truncation before wrapping.
-    complete = is_mxcell_xml_complete(xml)
-    if not complete:
+    xml_state = classify_mxcell_xml_fragment(xml)
+    if xml_state == "truncated":
         # Build a hint showing the last few lines so the LLM knows where
         # to continue from.
         lines = xml.rstrip().splitlines()
@@ -102,15 +107,27 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
             xml=xml,          # raw partial fragment stored in context
             is_truncated=True,
         )
+    if xml_state == "malformed":
+        lines = xml.rstrip().splitlines()
+        tail = "\n".join(lines[-3:]) if len(lines) > 3 else xml.rstrip()
+        message_parts = warnings + [
+            "Diagram XML is malformed, not truncated. "
+            "Do not call append_diagram. Regenerate the full display_diagram XML.",
+            "Common causes: extra closing tags, mismatched nesting, or unescaped XML characters.",
+            f"Last lines received:\n{tail}",
+        ]
+        return ToolResult(
+            success=False,
+            content="\n".join(message_parts),
+        )
 
     # 6. Wrap into full mxGraphModel.
     full_xml = add_mxgraph_wrapper(xml)
 
     # 7. Apply server-side auto-layout via Graphviz.
-    layout = params.get("layout", DEFAULT_DISPLAY_DIAGRAM_LAYOUT)
+    normalized_params = apply_display_diagram_layout_defaults("display_diagram", params)
+    layout = normalized_params.get("layout", DEFAULT_DISPLAY_DIAGRAM_LAYOUT)
     if layout != "none":
-        from app.tools.graphviz_layout import apply_graphviz_layout
-
         engine = LAYOUT_TO_GV_ENGINE.get(layout, "dot")
         full_xml = apply_graphviz_layout(full_xml, engine=engine)
 

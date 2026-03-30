@@ -96,6 +96,20 @@ class TestDisplayDiagram:
             )
 
     @pytest.mark.asyncio
+    async def test_malformed_xml_is_not_misreported_as_truncated(self):
+        """Malformed XML should fail clearly instead of requesting append_diagram."""
+        malformed = (
+            '<mxCell id="2" value="A" vertex="1" parent="1">'
+            '<mxGeometry x="40" y="40" width="120" height="60" as="geometry"/>'
+            "</mxCell></mxCell>"
+        )
+        ctx = _ctx()
+        result = await dispatch_tool("display_diagram", {"xml": malformed}, ctx)
+        assert result.success is False
+        assert result.is_truncated is False
+        assert "malformed, not truncated" in result.content
+
+    @pytest.mark.asyncio
     async def test_result_xml_contains_root_cells(self, sample_mxcell_xml):
         """Wrapped output includes auto-generated root cells id=0 and id=1."""
         ctx = _ctx()
@@ -254,6 +268,22 @@ class TestEditDiagram:
         ctx = _ctx(current_xml=sample_full_xml)
         result = await dispatch_tool("edit_diagram", {"operations": []}, ctx)
         assert result.success is False, "Empty operations list should be rejected"
+
+
+class TestAppendDiagram:
+    @pytest.mark.asyncio
+    async def test_malformed_combined_xml_fails_instead_of_looping(self):
+        """append_diagram should stop on malformed combined XML."""
+        partial = (
+            '<mxCell id="2" value="A" vertex="1" parent="1">'
+            '<mxGeometry x="40" y="40" width="120" height="60" as="geometry"/>'
+            "</mxCell>"
+        )
+        ctx = _ctx(current_xml=partial)
+        result = await dispatch_tool("append_diagram", {"xml": "</mxCell>"}, ctx)
+        assert result.success is False
+        assert result.is_truncated is False
+        assert "malformed, not truncated" in result.content
 
 
 # ---------------------------------------------------------------------------

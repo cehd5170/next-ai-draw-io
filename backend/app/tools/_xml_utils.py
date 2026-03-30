@@ -8,6 +8,7 @@ handling are consistent.
 from __future__ import annotations
 
 import re
+from typing import Literal
 from lxml import etree
 
 # ── Wrapper tags that must never appear in raw mxCell XML passed by the LLM ──
@@ -87,6 +88,42 @@ def has_mxcell(xml: str) -> bool:
     return bool(_MXCELL_OPEN_RE.search(xml))
 
 
+def has_explicit_vertex_positions(xml: str, *, min_vertices: int = 2) -> bool:
+    """
+    Return True when the fragment already contains positioned vertex geometry.
+
+    This is used to detect diagrams where the model intentionally laid out
+    nodes, in which case server-side auto-layout should usually stay off.
+    """
+    if not xml or not xml.strip():
+        return False
+
+    wrapped = f"<_tmp_>{xml}</_tmp_>"
+    parser = etree.XMLParser(recover=True)
+    try:
+        root = etree.fromstring(wrapped.encode(), parser)
+    except etree.XMLSyntaxError:
+        return False
+
+    positioned_vertices = 0
+    for cell in root.findall(".//mxCell"):
+        if cell.get("vertex") != "1":
+            continue
+
+        geo = cell.find("mxGeometry")
+        if geo is None:
+            continue
+
+        if geo.get("x") is None or geo.get("y") is None:
+            continue
+
+        positioned_vertices += 1
+        if positioned_vertices >= min_vertices:
+            return True
+
+    return False
+
+
 # ── Completeness check ────────────────────────────────────────────────────────
 
 def is_mxcell_xml_complete(xml: str) -> bool:
@@ -102,23 +139,34 @@ def is_mxcell_xml_complete(xml: str) -> bool:
        b. Walk all recognised tags and track open/close depth.  A positive
           final depth means at least one element was opened but not closed.
     """
+    return classify_mxcell_xml_fragment(xml) == "complete"
+
+
+def classify_mxcell_xml_fragment(xml: str) -> Literal["complete", "truncated", "malformed"]:
+    """
+    Classify a bare mxCell fragment as complete, truncated, or malformed.
+
+    ``truncated`` means the fragment appears cut off and may be continued via
+    ``append_diagram``. ``malformed`` means the fragment is not well-formed XML
+    and should be regenerated instead of appended to.
+    """
     if not xml or not xml.strip():
-        return False
+        return "truncated"
 
     # 1. Strict XML parse (fastest path for well-formed fragments).
     test = f"<_tmp_>{xml}</_tmp_>"
     try:
         etree.fromstring(test.encode())
-        return True
+        return "complete"
     except etree.XMLSyntaxError:
         pass
 
-    # 2a. Truncated mid-tag / mid-attribute check.
-    if xml.rstrip()[-1] != ">":
-        return False
+    stripped = xml.rstrip()
+    if not stripped or stripped[-1] != ">":
+        return "truncated"
 
-    # 2b. Tag-depth balance check.
     depth = 0
+    min_depth = 0
     for m in _TAG_RE.finditer(xml):
         slash_start = m.group(1)  # present on </tag>
         slash_end = m.group(4)    # present on <tag/>
@@ -126,9 +174,16 @@ def is_mxcell_xml_complete(xml: str) -> bool:
             depth -= 1
         elif not slash_end:
             depth += 1
+        min_depth = min(min_depth, depth)
         # self-closing (<tag/>) contributes 0 net depth
 
-    return depth == 0
+    if depth > 0:
+        return "truncated"
+
+    if min_depth < 0 or depth < 0:
+        return "malformed"
+
+    return "malformed"
 
 
 # ── mxGraphModel wrapper ───────────────────────────────────────────────────────
