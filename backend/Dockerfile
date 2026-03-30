@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     shared-mime-info \
+    graphviz \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

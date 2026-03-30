@@ -176,3 +176,28 @@ def get_all_cell_ids(tree: etree._Element) -> list[str]:
         for el in tree.findall(".//mxCell")
         if el.get("id") is not None
     ]
+
+
+def recover_partial_xml(xml: str) -> str | None:
+    """
+    Best-effort recovery of complete mxCell elements from truncated XML.
+
+    Uses lxml's recovery parser to extract all well-formed mxCell elements,
+    discarding any trailing incomplete element.  Returns the recovered XML
+    string, or None if no complete mxCell could be salvaged.
+    """
+    if not xml or not xml.strip():
+        return None
+
+    wrapped = f"<_tmp_>{xml}</_tmp_>"
+    parser = etree.XMLParser(recover=True)
+    try:
+        root = etree.fromstring(wrapped.encode(), parser)
+    except Exception:
+        return None
+
+    cells = root.findall(".//mxCell")
+    if not cells:
+        return None
+
+    return "\n".join(etree.tostring(c, encoding="unicode") for c in cells)

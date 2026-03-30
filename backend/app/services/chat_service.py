@@ -341,52 +341,71 @@ class _ResponsesStreamAdapter:
 # ---------------------------------------------------------------------------
 
 
-def _extract_text_from_pdf_data_url(data_url: str) -> str:
-    """Best-effort text extraction from a base64-encoded PDF data URL.
+def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
+    """Best-effort text extraction from raw PDF bytes.
 
     Uses ``pypdf`` (already a project dependency) for extraction.
-    Falls back to PyMuPDF or pdfminer if available.
+    Falls back to PyMuPDF if available.
     """
-    import base64 as b64mod  # noqa: PLC0415
     import io  # noqa: PLC0415
+
+    # pypdf is a project dependency — try it first.
+    try:
+        from pypdf import PdfReader  # noqa: PLC0415
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        text = "\n\n".join(pages).strip()
+        if text:
+            return text
+    except Exception:
+        pass
+
+    # Fallback: PyMuPDF
+    try:
+        import fitz  # noqa: PLC0415  (PyMuPDF)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pages = [page.get_text() for page in doc]
+        doc.close()
+        return "\n\n".join(pages).strip()
+    except ImportError:
+        pass
+
+    return ""
+
+
+def _extract_text_from_pdf_data_url(data_url: str) -> str:
+    """Extract text from a base64-encoded PDF data URL."""
+    import base64 as b64mod  # noqa: PLC0415
 
     try:
         if "," not in data_url:
             return ""
         b64_data = data_url.split(",", 1)[1]
         pdf_bytes = b64mod.b64decode(b64_data)
-
-        # pypdf is a project dependency — try it first.
-        try:
-            from pypdf import PdfReader  # noqa: PLC0415
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            pages = [page.extract_text() or "" for page in reader.pages]
-            text = "\n\n".join(pages).strip()
-            if text:
-                return text
-        except Exception:
-            pass
-
-        # Fallback: PyMuPDF
-        try:
-            import fitz  # noqa: PLC0415  (PyMuPDF)
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            pages = [page.get_text() for page in doc]
-            doc.close()
-            return "\n\n".join(pages).strip()
-        except ImportError:
-            pass
-
-        return ""
+        return _extract_text_from_pdf_bytes(pdf_bytes)
     except Exception:
         logger.warning("Failed to extract text from PDF data URL", exc_info=True)
         return ""
+
+
+def _fetch_pdf_bytes(url: str) -> bytes:
+    """Download PDF from *url* synchronously.  Raises on failure."""
+    import httpx  # noqa: PLC0415
+
+    resp = httpx.get(url, follow_redirects=True, timeout=30)
+    resp.raise_for_status()
+    return resp.content
 
 
 def _convert_pdf_file_blocks_to_text(messages: list[dict[str, Any]]) -> None:
     """
     In-place convert ``file`` content blocks (PDFs) to ``text`` blocks
     with extracted text.  Used when the model doesn't support PDF input.
+
+    Handles three kinds of PDF file blocks:
+    - ``file_data``: base64 data-URL  → decode and extract text
+    - ``file_url``:  regular HTTP URL  → download, then extract text
+    - ``text_fallback``: pre-extracted text → use directly as last resort
 
     Errors during extraction are logged and converted to informative
     placeholder text so the overall request is never silently broken.
@@ -403,34 +422,53 @@ def _convert_pdf_file_blocks_to_text(messages: list[dict[str, Any]]) -> None:
             if isinstance(part, dict) and part.get("type") == "file":
                 file_info = part.get("file") or {}
                 file_data = file_info.get("file_data", "")
+                file_url = file_info.get("file_url", "")
+                text_fallback = file_info.get("text_fallback", "").strip()
                 filename = file_info.get("filename", "document.pdf")
 
-                if not file_data:
+                text = ""
+
+                # 1. Base64 data URL
+                if file_data:
+                    try:
+                        text = _extract_text_from_pdf_data_url(file_data)
+                    except Exception:
+                        logger.error(
+                            "Unexpected error extracting text from PDF '%s'",
+                            filename,
+                            exc_info=True,
+                        )
+
+                # 2. Regular HTTP URL — download then extract
+                if not text and file_url:
+                    try:
+                        pdf_bytes = _fetch_pdf_bytes(file_url)
+                        text = _extract_text_from_pdf_bytes(pdf_bytes)
+                    except Exception:
+                        logger.error(
+                            "Failed to download/extract PDF from URL '%s'",
+                            file_url,
+                            exc_info=True,
+                        )
+
+                # 3. Pre-extracted text fallback
+                if not text and text_fallback:
+                    text = text_fallback
+
+                if text:
+                    new_content.append({
+                        "type": "text",
+                        "text": f"[PDF: {filename}]\n{text}",
+                    })
+                elif not file_data and not file_url:
                     logger.warning(
-                        "PDF file block for '%s' has no file_data; "
+                        "PDF file block for '%s' has no file_data or file_url; "
                         "replacing with placeholder text.",
                         filename,
                     )
                     new_content.append({
                         "type": "text",
                         "text": f"[Attached PDF: {filename} — no file data provided]",
-                    })
-                    continue
-
-                try:
-                    text = _extract_text_from_pdf_data_url(file_data)
-                except Exception:
-                    logger.error(
-                        "Unexpected error extracting text from PDF '%s'",
-                        filename,
-                        exc_info=True,
-                    )
-                    text = ""
-
-                if text:
-                    new_content.append({
-                        "type": "text",
-                        "text": f"[PDF: {filename}]\n{text}",
                     })
                 else:
                     logger.warning(
@@ -449,6 +487,59 @@ def _convert_pdf_file_blocks_to_text(messages: list[dict[str, Any]]) -> None:
                 new_content.append(part)
 
         msg["content"] = new_content
+
+
+def _resolve_pdf_url_blocks(messages: list[dict[str, Any]]) -> None:
+    """
+    In-place convert ``file_url`` PDF blocks to ``file_data`` blocks by
+    downloading the PDF and encoding as a base64 data URL.
+
+    Used in ``base64`` pdf_mode so that litellm receives inline data it
+    can forward to any provider.  Blocks that already have ``file_data``
+    are left untouched.
+    """
+    import base64 as b64mod  # noqa: PLC0415
+
+    for msg in messages:
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "file":
+                continue
+            file_info = part.get("file")
+            if not isinstance(file_info, dict):
+                continue
+            # Already has inline data — nothing to do.
+            if file_info.get("file_data"):
+                continue
+            file_url = file_info.get("file_url", "")
+            if not file_url:
+                continue
+
+            filename = file_info.get("filename", "document.pdf")
+            try:
+                pdf_bytes = _fetch_pdf_bytes(file_url)
+                b64_str = b64mod.b64encode(pdf_bytes).decode()
+                file_info["file_data"] = f"data:application/pdf;base64,{b64_str}"
+                file_info.pop("file_url", None)
+                file_info.pop("text_fallback", None)
+            except Exception:
+                logger.error(
+                    "Failed to download PDF '%s' from %s for base64 mode; "
+                    "falling back to text_fallback if available.",
+                    filename,
+                    file_url,
+                    exc_info=True,
+                )
+                text_fallback = file_info.get("text_fallback", "").strip()
+                if text_fallback:
+                    part["type"] = "text"
+                    part["text"] = f"[PDF: {filename}]\n{text_fallback}"
+                    part.pop("file", None)
 
 
 # ---------------------------------------------------------------------------
@@ -510,6 +601,10 @@ class ChatService:
         #   handle the PDF natively if it supports it.
         if pdf_mode == "text":
             _convert_pdf_file_blocks_to_text(messages)
+        else:
+            # base64 mode — resolve any file_url blocks by downloading
+            # and converting to base64 data URLs that litellm can handle.
+            _resolve_pdf_url_blocks(messages)
 
         tool_defs = _CACHED_TOOL_DEFS
 
@@ -534,6 +629,7 @@ class ChatService:
         diagram_retry_used = False
         shape_library_consulted = preferred_shape_library is None
         diagram_tool_emitted = False
+        consecutive_truncations = 0
 
         for step in range(self.settings.MAX_TOOL_STEPS):
             # ------------------------------------------------------------------
@@ -814,6 +910,21 @@ class ChatService:
 
             messages.append(assistant_msg)
 
+            # Compact diagram tool arguments in the history message we
+            # just appended.  The full XML is already tracked in
+            # tool_context.current_xml; keeping it in conversation
+            # history wastes context and accelerates truncation in
+            # subsequent steps (especially during append_diagram loops).
+            _DIAGRAM_TOOLS = {"display_diagram", "edit_diagram", "append_diagram"}
+            if assistant_msg.get("tool_calls"):
+                for tc in assistant_msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    if fn.get("name") in _DIAGRAM_TOOLS:
+                        fn["arguments"] = json.dumps(
+                            {"placeholder": "[XML stored in diagram context]"},
+                            ensure_ascii=False,
+                        )
+
             # ------------------------------------------------------------------
             # Emit tool events.
             #
@@ -910,6 +1021,52 @@ class ChatService:
                 step_stats["tool_delta_chars"],
                 len(tool_calls_acc),
             )
+
+            # Track consecutive truncations.  If append keeps failing,
+            # force-complete with whatever XML we have rather than
+            # looping until MAX_TOOL_STEPS (each iteration grows the
+            # conversation history, leaving the LLM less output budget).
+            step_had_truncation = any(
+                acc["name"] in ("display_diagram", "append_diagram")
+                for acc in tool_calls_acc.values()
+            ) and needs_another_round
+            if step_had_truncation:
+                consecutive_truncations += 1
+            else:
+                consecutive_truncations = 0
+
+            if consecutive_truncations >= 3 and tool_context.current_xml:
+                from app.tools._xml_utils import (  # noqa: PLC0415
+                    add_mxgraph_wrapper,
+                    has_mxcell,
+                    recover_partial_xml,
+                )
+
+                partial = tool_context.current_xml
+                recovered = recover_partial_xml(partial)
+                if recovered and has_mxcell(recovered):
+                    full_xml = add_mxgraph_wrapper(recovered)
+                    tool_context.current_xml = full_xml
+                    logger.warning(
+                        "[chat stream] force-completing diagram after %d "
+                        "consecutive truncations (%d chars recovered)",
+                        consecutive_truncations,
+                        len(recovered),
+                    )
+                    yield _sse(
+                        {
+                            "type": "tool-output-available",
+                            "toolCallId": "force_complete",
+                            "output": {
+                                "message": (
+                                    "Diagram was too large to generate completely. "
+                                    "Displaying what was generated so far."
+                                ),
+                                "xml": full_xml,
+                            },
+                        }
+                    )
+                    break
 
             # If nothing requires another LLM round, we are done.
             if not needs_another_round:

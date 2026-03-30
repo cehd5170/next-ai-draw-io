@@ -206,21 +206,41 @@ def _convert_user_message(parts: list[Any]) -> list[dict[str, Any]]:
                     "image_url": {"url": url},
                 })
             elif media_type == "application/pdf":
-                # PDFs: use litellm's ``file`` content block with
-                # inline base64 (NOT a file upload).  ``file_data``
-                # contains the base64 data-URL string.  litellm
-                # converts this to each provider's native format:
-                #   OpenAI  → keeps as ``file`` (Responses API)
-                #   Anthropic → ``document`` with base64 source
-                #   Bedrock → ``BedrockDocumentBlock``
-                #   Google  → ``inline_data``
-                content.append({
-                    "type": "file",
-                    "file": {
-                        "file_data": url,
-                        "filename": _get_part_filename(part, "document.pdf"),
-                    },
-                })
+                pdf_filename = _get_part_filename(part, "document.pdf")
+                if url.startswith("data:"):
+                    # Base64 data URL — litellm converts to each
+                    # provider's native format (OpenAI file, Anthropic
+                    # document, Bedrock BedrockDocumentBlock, etc.).
+                    content.append({
+                        "type": "file",
+                        "file": {
+                            "file_data": url,
+                            "filename": pdf_filename,
+                        },
+                    })
+                elif url.startswith("http://") or url.startswith("https://"):
+                    # Regular URL — store separately so downstream
+                    # handlers can fetch the PDF when needed.
+                    content.append({
+                        "type": "file",
+                        "file": {
+                            "file_url": url,
+                            "filename": pdf_filename,
+                            **({"text_fallback": text_fallback} if text_fallback else {}),
+                        },
+                    })
+                elif text_fallback:
+                    # Unrecognised URL scheme but we have extracted text.
+                    content.append({
+                        "type": "text",
+                        "text": f"[PDF: {pdf_filename}]\n{text_fallback}",
+                    })
+                else:
+                    logger.warning(
+                        "PDF part has unrecognised url scheme; skipping. name=%r, url_prefix=%s",
+                        pdf_filename,
+                        url[:60],
+                    )
             else:
                 # Other non-image files: include as text with metadata.
                 content.append({

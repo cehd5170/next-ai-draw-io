@@ -21,6 +21,7 @@ from app.tools._xml_utils import (
     strip_wrapper_tags,
 )
 from app.prompts.constants import TOOL_SCHEMAS
+from app.tools.layout_policy import DEFAULT_DISPLAY_DIAGRAM_LAYOUT, LAYOUT_TO_GV_ENGINE
 
 
 # ── Execution ─────────────────────────────────────────────────────────────────
@@ -102,8 +103,16 @@ async def execute_display_diagram(params: dict, context: ToolContext) -> ToolRes
             is_truncated=True,
         )
 
-    # 6. Wrap and return the full diagram.
+    # 6. Wrap into full mxGraphModel.
     full_xml = add_mxgraph_wrapper(xml)
+
+    # 7. Apply server-side auto-layout via Graphviz.
+    layout = params.get("layout", DEFAULT_DISPLAY_DIAGRAM_LAYOUT)
+    if layout != "none":
+        from app.tools.graphviz_layout import apply_graphviz_layout
+
+        engine = LAYOUT_TO_GV_ENGINE.get(layout, "dot")
+        full_xml = apply_graphviz_layout(full_xml, engine=engine)
 
     message_parts = warnings + [
         "Diagram created successfully. Do not edit or refine — wait for user feedback."

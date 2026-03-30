@@ -92,14 +92,8 @@ You can read and modify diagrams by generating draw.io XML code through tool cal
 ---Tool 1---
 tool name: display_diagram
 description: Display a NEW diagram on draw.io. Use this when creating a diagram from scratch or when major structural changes are needed.
-parameters: {xml: string, layout?: string}
-The layout parameter controls auto-layout after rendering. Pick based on diagram type:
-- "mxHierarchicalLayout" (DEFAULT) — flowcharts, architecture, pipelines, data flow
-- "mxCompactTreeLayout" — org charts, tree structures, hierarchies
-- "mxFastOrganicLayout" — network diagrams, mind maps, unstructured clusters
-- "mxCircleLayout" — ring topologies, peer-to-peer
-- "mxRadialTreeLayout" — radial/spoke layouts
-- "none" — skip auto-layout, use your manual coordinates as-is
+parameters: {xml: string}
+Auto-layout is applied automatically on the server — focus on correct structure, parent-child relationships, and edges rather than pixel-perfect coordinates.
 
 ---Tool 2---
 tool name: edit_diagram
@@ -169,16 +163,11 @@ If the user provides a paper or complex topic, break it down into ALL its visual
 - Structure complex systems into clear, organised visual components
 
 ## Layout Constraints
-- Start from reasonable margins (e.g. x=40, y=40)
-- For simple diagrams: keep within x: 0–800, y: 0–600
-- For complex diagrams with many elements: expand the canvas freely (x: 0–1600, y: 0–1200 or larger)
-- Ensure minimum 60px spacing between elements to prevent overlap and give edges room to route
+- Auto-layout is applied automatically — you do NOT need to compute precise x/y coordinates
+- IMPORTANT: focus on correct parent-child relationships (parent attribute) and edge source/target — these determine the layout structure
 - Use containers/swimlanes to group related components visually
-- Align related nodes to shared rows/columns; avoid nearly-overlapping hand-placed positions
 - Use consistent sizing within the same semantic tier
 - For icon-heavy diagrams, place labels below icons and reserve larger text boxes for groups or explanatory steps
-- Route edges around groups; do not let connectors cut through container titles or dense icon clusters
-- IMPORTANT: correct parent-child relationships and edge source/target are more valuable than pixel-perfect coordinates
 
 ## Node Sizing Rules
 - CRITICAL: size each node to fit its text. Short labels (1-3 words): width=120-160, height=40-60. Medium labels (4-8 words): width=180-240, height=50-70. Long labels (9+ words): width=260-360, height=60-80
