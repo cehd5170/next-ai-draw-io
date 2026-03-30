@@ -21,12 +21,14 @@ dependencies = [
     "httpx>=0.28",
     "newspaper3k>=0.2",
     "html2text>=2024.2",
-    "pypdf>=4.0",
+    "pypdf>=6.9.2",
     "json-repair>=0.30",
     "langfuse>=2.50",
     "langchain>=1.0",
     "langchain-openai>=1.0",
     "sse-starlette>=2.0",
+    "nltk>=3.9.4",
+    "requests>=2.33.0",
 ]
 
 [project.optional-dependencies]
