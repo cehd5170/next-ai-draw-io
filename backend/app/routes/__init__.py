@@ -15,6 +15,7 @@ Or import individual routers::
 
 from app.routes.chat import router as chat_router
 from app.routes.chat_agents import router as chat_agents_router
+from app.routes.chat_deepagents import router as chat_deepagents_router
 from app.routes.config import router as config_router
 from app.routes.export_pptx import router as export_pptx_router
 from app.routes.log_feedback import router as log_feedback_router
@@ -28,6 +29,7 @@ from app.routes.verify_access import router as verify_access_router
 __all__ = [
     "chat_router",
     "chat_agents_router",
+    "chat_deepagents_router",
     "config_router",
     "export_pptx_router",
     "log_feedback_router",
@@ -44,6 +46,7 @@ __all__ = [
 all_routers = [
     chat_router,
     chat_agents_router,
+    chat_deepagents_router,
     config_router,
     server_models_router,
     verify_access_router,
