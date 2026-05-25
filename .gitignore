@@ -76,3 +76,5 @@ ai-models.json
 
 # local backups
 *.bak
+
+*.egg-info
