@@ -52,7 +52,7 @@ const STORAGE_SESSION_ID_KEY = "next-ai-draw-io-session-id"
 
 // sessionStorage keys
 const SESSION_STORAGE_INPUT_KEY = "next-ai-draw-io-input"
-type ChatEndpointMode = "chat" | "agents"
+type ChatEndpointMode = "chat" | "agents" | "deepagents"
 
 interface ChatPanelProps {
     isVisible: boolean
@@ -185,7 +185,11 @@ export default function ChatPanel({
 
     useEffect(() => {
         const stored = localStorage.getItem(STORAGE_KEYS.chatEndpointMode)
-        if (stored === "chat" || stored === "agents") {
+        if (
+            stored === "chat" ||
+            stored === "agents" ||
+            stored === "deepagents"
+        ) {
             setChatEndpointMode(stored)
         }
     }, [])
@@ -324,7 +328,11 @@ export default function ChatPanel({
     )
 
     const chatApiPath =
-        chatEndpointMode === "agents" ? "/api/chat-agents" : "/api/chat"
+        chatEndpointMode === "deepagents"
+            ? "/api/chat-deepagents"
+            : chatEndpointMode === "agents"
+              ? "/api/chat-agents"
+              : "/api/chat"
 
     // Ref to store the sendMessage function for use in callbacks
     const sendMessageRef = useRef<typeof sendMessage | null>(null)
