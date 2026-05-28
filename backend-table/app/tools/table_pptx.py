@@ -6,6 +6,10 @@ Layouts
 - "table_only"   : title + full-slide table (default)
 - "text_above"   : title + text block + table below
 - "text_left"    : title + text on left half + table on right half
+- "table_bottom" : title + text above + table in the lower portion
+- "table_top"    : title + table in the upper portion + text below
+- "table_left"   : title + table on the left + text on the right
+- "table_right"  : title + text on the left + table on the right
 
 Overflow handling
 -----------------
@@ -16,8 +20,11 @@ Overflow handling
 from __future__ import annotations
 
 import io
+import re
 import time
 import uuid
+from pathlib import Path
+from urllib.parse import quote
 from typing import Literal
 
 from pptx import Presentation
@@ -46,33 +53,98 @@ HEADER_FG = RGBColor(0xFF, 0xFF, 0xFF)
 ALT_BG    = RGBColor(0xDD, 0xE8, 0xF5)
 WHITE     = RGBColor(0xFF, 0xFF, 0xFF)
 
-Layout = Literal["table_only", "text_above", "text_left"]
+Layout = Literal[
+    "table_only",
+    "text_above",
+    "text_left",
+    "table_bottom",
+    "table_top",
+    "table_left",
+    "table_right",
+]
+TableKind = Literal[
+    "source_table",
+    "extracted_summary",
+    "comparison",
+    "timeline",
+    "matrix",
+    "qa",
+    "other",
+]
 
 # ── In-memory store ──────────────────────────────────────────────────────────
 
-_store: dict[str, tuple[bytes, float]] = {}
+STORE_DIR = Path("/tmp/backend-table-pptx")
+_store: dict[str, tuple[Path, str, float]] = {}
 
 
-def store_pptx(data: bytes, ttl: int) -> str:
+def safe_pptx_filename(filename: str) -> str:
+    clean = re.sub(r"[\\/\r\n\t]+", " ", filename).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    clean = clean or "table.pptx"
+    if not clean.lower().endswith(".pptx"):
+        clean = f"{clean}.pptx"
+    return clean
+
+
+def ascii_fallback_filename(filename: str) -> str:
+    clean = safe_pptx_filename(filename)
+    ascii_name = re.sub(r"[^A-Za-z0-9._ -]+", "", clean).strip(" .")
+    if ascii_name.lower() == "pptx":
+        return "table.pptx"
+    return ascii_name or "table.pptx"
+
+
+def content_disposition(filename: str) -> str:
+    safe_name = safe_pptx_filename(filename)
+    fallback = ascii_fallback_filename(safe_name)
+    encoded = quote(safe_name)
+    return f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}'
+
+
+def store_pptx(data: bytes, filename_or_ttl: str | int = "table.pptx", ttl: int | None = None) -> str:
+    if ttl is None:
+        filename = "table.pptx"
+        ttl_seconds = int(filename_or_ttl)
+    else:
+        filename = safe_pptx_filename(str(filename_or_ttl))
+        ttl_seconds = ttl
+
     token = uuid.uuid4().hex
-    _store[token] = (data, time.monotonic() + ttl)
+    STORE_DIR.mkdir(parents=True, exist_ok=True)
+    path = STORE_DIR / f"{token}.pptx"
+    path.write_bytes(data)
+    _store[token] = (path, filename, time.monotonic() + ttl_seconds)
     return token
 
 
 def get_pptx(token: str) -> bytes | None:
+    entry = get_pptx_entry(token)
+    if entry is None:
+        return None
+    data, _filename = entry
+    return data
+
+
+def get_pptx_entry(token: str) -> tuple[bytes, str] | None:
     entry = _store.get(token)
     if entry is None:
         return None
-    data, expiry = entry
+    path, filename, expiry = entry
     if time.monotonic() > expiry:
         del _store[token]
+        path.unlink(missing_ok=True)
         return None
-    return data
+    if not path.exists():
+        del _store[token]
+        return None
+    return path.read_bytes(), filename
 
 
 def evict_expired() -> None:
     now = time.monotonic()
-    for k in [k for k, (_, exp) in _store.items() if now > exp]:
+    for k, (path, _, _) in [(k, entry) for k, entry in _store.items() if now > entry[2]]:
+        path.unlink(missing_ok=True)
         del _store[k]
 
 
@@ -113,7 +185,7 @@ def _col_widths(headers: list[str], rows: list[list[str]], total_width) -> list[
             max_lens[c] = max(max_lens[c], len(str(row[c])) if c < len(row) else 0)
     total_chars = sum(max_lens) or 1
     min_w = int(total_width / n_cols * 0.4)  # floor: 40% of even share
-    widths = [max(min_w, int(total_width * l / total_chars)) for l in max_lens]
+    widths = [max(min_w, int(total_width * length / total_chars)) for length in max_lens]
     # Scale down proportionally if total exceeds available width
     total = sum(widths)
     if total > total_width:
@@ -158,6 +230,81 @@ def _add_table(slide, headers, rows, left, top, width, height, font_pt: float) -
                 runs[0].font.size = Pt(font_pt)
 
 
+def _validate_table_inputs(headers: list[str], rows: list[list[str]]) -> None:
+    if not headers:
+        raise ValueError("headers must not be empty")
+    if any(not str(header).strip() for header in headers):
+        raise ValueError("headers must not contain blank values")
+    if rows is None:
+        raise ValueError("rows must not be None")
+
+
+def _normalize_table_ratio(table_ratio: float) -> float:
+    try:
+        ratio = float(table_ratio)
+    except (TypeError, ValueError):
+        ratio = 0.5
+    return min(0.8, max(0.2, ratio))
+
+
+def _compute_regions(layout: Layout, table_ratio: float, has_text: bool):
+    content_left = MARGIN
+    content_top = CONTENT_TOP
+    content_w = SLIDE_W - MARGIN * 2
+    content_h = CONTENT_H
+    gap = Inches(0.15)
+
+    if not has_text or layout == "table_only":
+        return None, (content_left, content_top, content_w, content_h), "table_only"
+
+    ratio = _normalize_table_ratio(table_ratio)
+    resolved_layout = layout
+    if layout == "text_above":
+        resolved_layout = "table_bottom"
+        ratio = 0.75
+    elif layout == "text_left":
+        resolved_layout = "table_right"
+        ratio = 0.5
+
+    if resolved_layout == "table_bottom":
+        tbl_h = int(content_h * ratio)
+        text_h = content_h - tbl_h - gap
+        return (
+            (content_left, content_top, content_w, text_h),
+            (content_left, content_top + text_h + gap, content_w, tbl_h),
+            resolved_layout,
+        )
+
+    if resolved_layout == "table_top":
+        tbl_h = int(content_h * ratio)
+        text_h = content_h - tbl_h - gap
+        return (
+            (content_left, content_top + tbl_h + gap, content_w, text_h),
+            (content_left, content_top, content_w, tbl_h),
+            resolved_layout,
+        )
+
+    if resolved_layout == "table_left":
+        tbl_w = int(content_w * ratio)
+        text_w = content_w - tbl_w - gap
+        return (
+            (content_left + tbl_w + gap, content_top, text_w, content_h),
+            (content_left, content_top, tbl_w, content_h),
+            resolved_layout,
+        )
+
+    if resolved_layout == "table_right":
+        tbl_w = int(content_w * ratio)
+        text_w = content_w - tbl_w - gap
+        return (
+            (content_left, content_top, text_w, content_h),
+            (content_left + text_w + gap, content_top, tbl_w, content_h),
+            resolved_layout,
+        )
+
+    return None, (content_left, content_top, content_w, content_h), "table_only"
+
+
 def _compute_font_and_chunks(
     n_rows: int,
     available_h,
@@ -195,35 +342,36 @@ def build_pptx(
     rows: list[list[str]],
     text: str = "",
     layout: Layout = "table_only",
+    table_ratio: float = 0.5,
 ) -> bytes:
+    _validate_table_inputs(headers, rows)
     prs = Presentation()
     prs.slide_width = SLIDE_W
     prs.slide_height = SLIDE_H
 
     blank_layout = prs.slide_layouts[6]
+    _add_table_slides(prs, blank_layout, title, headers, rows, text, layout, table_ratio)
 
-    # Determine geometry based on layout
-    if layout == "text_above" and text:
-        text_h = Inches(1.4)
-        tbl_top = CONTENT_TOP + text_h + Inches(0.15)
-        tbl_left = MARGIN
-        tbl_w = SLIDE_W - MARGIN * 2
-        tbl_h = SLIDE_H - tbl_top - MARGIN
-        available_h = tbl_h
-    elif layout == "text_left" and text:
-        col_w = (SLIDE_W - MARGIN * 3) / 2
-        tbl_top = CONTENT_TOP
-        tbl_left = MARGIN + col_w + MARGIN
-        tbl_w = col_w
-        tbl_h = CONTENT_H
-        available_h = tbl_h
-    else:
-        layout = "table_only"
-        tbl_top = CONTENT_TOP
-        tbl_left = MARGIN
-        tbl_w = SLIDE_W - MARGIN * 2
-        tbl_h = CONTENT_H
-        available_h = tbl_h
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def _add_table_slides(
+    prs: Presentation,
+    blank_layout,
+    title: str,
+    headers: list[str],
+    rows: list[list[str]],
+    text: str = "",
+    layout: Layout = "table_only",
+    table_ratio: float = 0.5,
+) -> None:
+    _validate_table_inputs(headers, rows)
+
+    text_region, table_region, layout = _compute_regions(layout, table_ratio, bool(text))
+    tbl_left, tbl_top, tbl_w, tbl_h = table_region
+    available_h = tbl_h
 
     font_pt, chunks = _compute_font_and_chunks(len(rows), available_h)
 
@@ -235,12 +383,8 @@ def build_pptx(
         _add_title(slide, page_title)
 
         # Text area (only on first slide for multi-page)
-        if text and i == 0:
-            if layout == "text_above":
-                _add_text_box(slide, text, MARGIN, CONTENT_TOP, SLIDE_W - MARGIN * 2, Inches(1.4))
-            elif layout == "text_left":
-                col_w = (SLIDE_W - MARGIN * 3) / 2
-                _add_text_box(slide, text, MARGIN, CONTENT_TOP, col_w, CONTENT_H)
+        if text_region and text and i == 0:
+            _add_text_box(slide, text, *text_region)
 
         chunk_rows = rows[offset: offset + chunk_size]
         offset += chunk_size
@@ -250,6 +394,28 @@ def build_pptx(
         actual_h = min(tbl_h, ROW_H * n_rows_slide)
 
         _add_table(slide, headers, chunk_rows, tbl_left, tbl_top, tbl_w, actual_h, font_pt)
+
+
+def build_tables_pptx(tables: list[dict]) -> bytes:
+    if not tables:
+        raise ValueError("tables must not be empty")
+
+    prs = Presentation()
+    prs.slide_width = SLIDE_W
+    prs.slide_height = SLIDE_H
+    blank_layout = prs.slide_layouts[6]
+
+    for table in tables:
+        _add_table_slides(
+            prs,
+            blank_layout,
+            str(table["title"]),
+            [str(header) for header in table["headers"]],
+            [[str(cell) for cell in row] for row in table["rows"]],
+            str(table.get("text", "")),
+            table.get("layout", "table_only"),
+            table.get("table_ratio", 0.5),
+        )
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -263,25 +429,105 @@ TOOL_SCHEMA = {
     "function": {
         "name": "create_table_pptx",
         "description": (
-            "Generate a PowerPoint (.pptx) file containing a table with optional explanatory text. "
-            "Use this when the user wants to summarise, compare, or organise data in tabular form."
+            "Generate a PowerPoint (.pptx) file containing one or more tables. "
+            "Use source_table tables to preserve tables already present in the input, and use "
+            "derived table kinds to summarize, compare, or reorganize key points."
         ),
         "parameters": {
             "type": "object",
             "properties": {
+                "presentation_title": {
+                    "type": "string",
+                    "description": "Specific filename/presentation title for the generated deck.",
+                },
+                "tables": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Specific slide title shown above this table.",
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "source_table",
+                                    "extracted_summary",
+                                    "comparison",
+                                    "timeline",
+                                    "matrix",
+                                    "qa",
+                                    "other",
+                                ],
+                                "description": (
+                                    "Use source_table for a table copied from the original content; "
+                                    "use the other values for generated/derived tables."
+                                ),
+                            },
+                            "headers": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Column header labels.",
+                            },
+                            "rows": {
+                                "type": "array",
+                                "items": {"type": "array", "items": {"type": "string"}},
+                                "description": "Table rows; each inner array must match headers length.",
+                            },
+                            "text": {
+                                "type": "string",
+                                "description": (
+                                    "Optional explanatory text to accompany the table "
+                                    "(e.g. summary, key findings, source note). Leave empty if not needed."
+                                ),
+                            },
+                            "layout": {
+                                "type": "string",
+                                "enum": [
+                                    "table_only",
+                                    "text_above",
+                                    "text_left",
+                                    "table_bottom",
+                                    "table_top",
+                                    "table_left",
+                                    "table_right",
+                                ],
+                                "description": (
+                                    "Slide layout. Use table_bottom with table_ratio=0.33 for a lower-third "
+                                    "table with text above; use table_right with table_ratio=0.33 for a "
+                                    "right-third table with text on the left. Legacy text_above/text_left are "
+                                    "also accepted."
+                                ),
+                            },
+                            "table_ratio": {
+                                "type": "number",
+                                "minimum": 0.2,
+                                "maximum": 0.8,
+                                "description": (
+                                    "Fraction of the content area occupied by the table for table_top, "
+                                    "table_bottom, table_left, or table_right. Use 0.33 for one-third."
+                                ),
+                            },
+                        },
+                        "required": ["title", "kind", "headers", "rows"],
+                        "additionalProperties": False,
+                    },
+                    "description": "Ordered tables to place into the deck, one table section per slide group.",
+                },
                 "title": {
                     "type": "string",
-                    "description": "Specific slide title shown above the table.",
+                    "description": "Legacy single-table slide title. Prefer tables[].title.",
                 },
                 "headers": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Column header labels.",
+                    "description": "Legacy single-table column headers. Prefer tables[].headers.",
                 },
                 "rows": {
                     "type": "array",
                     "items": {"type": "array", "items": {"type": "string"}},
-                    "description": "Table rows; each inner array must match headers length.",
+                    "description": "Legacy single-table rows. Prefer tables[].rows.",
                 },
                 "text": {
                     "type": "string",
@@ -292,15 +538,29 @@ TOOL_SCHEMA = {
                 },
                 "layout": {
                     "type": "string",
-                    "enum": ["table_only", "text_above", "text_left"],
+                    "enum": [
+                        "table_only",
+                        "text_above",
+                        "text_left",
+                        "table_bottom",
+                        "table_top",
+                        "table_left",
+                        "table_right",
+                    ],
                     "description": (
-                        "Slide layout. Use 'text_above' when text is a short heading/summary; "
-                        "'text_left' when text and table are equally important; "
-                        "'table_only' when no text is provided."
+                        "Legacy single-table layout. Prefer tables[].layout."
+                    ),
+                },
+                "table_ratio": {
+                    "type": "number",
+                    "minimum": 0.2,
+                    "maximum": 0.8,
+                    "description": (
+                        "Legacy single-table table ratio. Prefer tables[].table_ratio."
                     ),
                 },
             },
-            "required": ["title", "headers", "rows"],
+            "required": [],
             "additionalProperties": False,
         },
     },
